@@ -37,18 +37,18 @@ Serve the median Snowflake workload (about $100k a year) for $10k to $30k a year
 
 Written before any build. Both must pass before this case scales up.
 
-- **Gate 1:** a DuckDB-centric prototype serves a real design-partner workload at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
+- **Gate 1:** a DuckDB-centric prototype serves a representative workload set (built by us, modeled on documented Snowflake usage; no design partner, per Tom's ruling on Nov 5, 2026) at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
 - **Gate 2:** 10 paying orgs at full price, no discount doing the work, converted from the free tier at 1% or better.
 
 ## Kill / park criteria
 
 Park if any two hold:
 
-- Design partners need multi-node queries the wedge cannot serve.
+- Target workloads need multi-node queries the wedge cannot serve.
 - Free-tier cost breaks the $10k to $30k target at 70% gross margin.
 - MotherDuck closes the open-source and self-host gap before opensnow differentiates.
 - Services-layer scope creeps toward Snowflake parity before revenue exists.
 
 ## What could not be verified
 
-Snowflake bill percentiles and edition mix; deduplicated warehouse-user counts by segment; MotherDuck customers or revenue; BigQuery and Redshift revenue (not disclosed); independent price-performance benchmarks at small scale; Snowflake churn decomposition. The case does not depend on any of these, but the design phase should treat the Snowflake-cost model of a design partner as the first thing to nail down with real bills.
+Snowflake bill percentiles and edition mix; deduplicated warehouse-user counts by segment; MotherDuck customers or revenue; BigQuery and Redshift revenue (not disclosed); independent price-performance benchmarks at small scale; Snowflake churn decomposition. The case does not depend on any of these, but the Gate 1 cost model rests on published Snowflake pricing applied to our reference workloads until real user bills exist after launch.

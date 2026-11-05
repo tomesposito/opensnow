@@ -12,6 +12,7 @@
 |---|---|
 | 2026-11-05 | First draft. Vision, wedge scope, layered architecture, dialect position, experience and agent layers, pricing, phasing tied to Gate 1 and Gate 2, decision queue restated as open. |
 | 2026-11-05 | Tom approved the D-01 to D-06 recommendations. Decision queue marked DECIDED; DuckLake vs Iceberg evaluation queued as a D-01 sub-study for the Phase 0 storage spike. |
+| 2026-11-05 | Operating model set by Tom: built by Tom plus the Muse and Codex loop (as with OpenSight and freeDMS), first cloud AWS, no design partner. Gate 1 re-based on reference workloads we build, priced on published Snowflake rates against our real AWS costs. |
 
 ---
 
@@ -65,7 +66,7 @@ The wedge serves the priced-out. That means teams spending $5k to $150k a year o
 
 ### 2.4 The gates this scope must pass
 
-- **Gate 1:** a DuckDB-centric prototype serves a real design-partner workload at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
+- **Gate 1:** a DuckDB-centric prototype serves a representative workload set (built by us, modeled on documented Snowflake usage; no design partner, per Tom's ruling on Nov 5, 2026) at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
 - **Gate 2:** 10 paying orgs at full price, no discount doing the work, converted from the free tier at 1% or better.
 
 Section 8 ties the phases to these gates.
@@ -82,7 +83,7 @@ Status of this whole section: **recommendation, pending Tom's ruling on D-01.** 
 
 Three reasons, straight from the research:
 
-1. Gate 1 tests exactly this shape. A prototype that serves a design partner at a tenth of Snowflake cost either validates the wedge or kills it cheaply.
+1. Gate 1 tests exactly this shape. A prototype that serves the reference workload set at a tenth of Snowflake cost either validates the wedge or kills it cheaply.
 2. DuckDB gives the best local story. The same engine runs in a laptop, in a browser, and in the hosted service, with the same SQL everywhere. Section 6 needs that for the agent layer.
 3. Iceberg storage keeps the exit open. Data lives in an open format the other archetypes read natively. A later move to Archetype B (DataFusion core, custom coordinator) reads the same tables. The storage choice survives the engine choice.
 
@@ -223,14 +224,14 @@ Phases follow the gates from the business case. Work starts only after Tom rules
 ### Phase 0: Design and prototype prep
 
 - Rule on D-01 to D-06.
-- Pick a design partner with a real Snowflake bill and a workload that fits one node.
-- Write the Snowflake-compatibility list for D-02 and the cost model that Gate 1 will be judged against. The business case names the design partner's real bills as the first thing to nail down.
+- Build the reference workload set: analytical workloads sized to the priced-out segment (Section 2), modeled on documented Snowflake usage patterns, each with its Snowflake cost worked out on published Snowflake pricing.
+- Write the Snowflake-compatibility list for D-02 and the cost model that Gate 1 will be judged against: our real AWS costs against the same workloads priced on Snowflake's arithmetic. No design partner feeds this (Tom, Nov 5, 2026); the cost model gets rebuilt from real user bills after launch.
 
 ### Phase 1: Gate 1
 
 Build the thinnest end-to-end slice: DuckDB per tenant, Iceberg storage with compaction, Postgres control plane, worksheets and navigation in the UI, metering with per-query costs, the MCP server and local mode from Section 6.
 
-**Gate 1 passes when** the prototype serves the design partner's real workload at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
+**Gate 1 passes when** the prototype serves the reference workload set at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
 
 A Gate 1 failure is useful data. It means the wedge shape is wrong, and the kill criteria below decide what happens next.
 
@@ -248,7 +249,7 @@ Scale work earns its place here: bigger nodes, more concurrency, the Archetype B
 
 Copied from docs/BUSINESS-CASE.md. Park if any two hold:
 
-- Design partners need multi-node queries the wedge cannot serve.
+- Target workloads need multi-node queries the wedge cannot serve.
 - Free-tier cost breaks the $10k to $30k target at 70% gross margin.
 - MotherDuck closes the open-source and self-host gap before opensnow differentiates.
 - Services-layer scope creeps toward Snowflake parity before revenue exists.
@@ -263,7 +264,7 @@ Restated from docs/DECISIONS.md. Tom approved the recommendations for D-01 to D-
 
 Four archetypes from the research: A (DuckDB-centric, one engine per tenant), B (DataFusion-native, built for multi-node), C (adopt ClickHouse), D (Iceberg plus Trino plus Spark assembly).
 
-Recommendation: A to start, because Gate 1 tests exactly it, it is the fastest path to a design partner, and the Iceberg storage layer keeps the exit to B open. Choosing A is choosing a single-query ceiling for v1 and saying so in public.
+Recommendation: A to start, because Gate 1 tests exactly it, it is the fastest path to a working product, and the Iceberg storage layer keeps the exit to B open. Choosing A is choosing a single-query ceiling for v1 and saying so in public.
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
@@ -291,7 +292,7 @@ Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
 Recommendation: both, in order. The same artifact self-hosts free, and the hosted version is that artifact run by us. Hosted starts on one cloud.
 
-Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
+Status: DECIDED (Tom, Nov 5, 2026): approved as recommended. First cloud decided the same day: AWS.
 
 ### D-06: The name
 
@@ -305,7 +306,7 @@ Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
 ### Risks the research surfaced
 
-- **The single-query ceiling (Archetype A).** One node caps one query. If design partners hit that cap early, Gate 1 fails and the first kill criterion fires. The mitigation is publishing the ceiling plainly plus the Iceberg exit ramp, and both cost time if the move to Archetype B comes early.
+- **The single-query ceiling (Archetype A).** One node caps one query. If the reference workloads hit that cap early, Gate 1 fails and the first kill criterion fires. The mitigation is publishing the ceiling plainly plus the Iceberg exit ramp, and both cost time if the move to Archetype B comes early.
 - **Distributed execution is where projects stall.** Every path to multi-node runs through the hardest distributed systems problems in databases: shuffle, skew handling, fault tolerance, a global optimizer. Archetype B estimates run 2 to 3 years and 10+ engineers for a credible multi-node warehouse. The wedge survives by deferring this, and deferral has an expiry date.
 - **Services-layer scope creep.** The services layer is the moat and the tar pit. The research found DIY lakehouse assembly alone running 3 to 6 FTE and 30 to 40 percent of build cost per year in ongoing maintenance, in vendor-adjacent estimates. The fourth kill criterion watches this directly.
 - **MotherDuck closes the gap.** MotherDuck has the hosted DuckDB layer, the agent story, and $100M raised. Its weak spots today are the self-host and open-source gaps the business case targets. If it closes them first, the third kill criterion fires.
@@ -324,14 +325,14 @@ DuckDB (MIT) and Polaris, Iceberg, and DataFusion (Apache-2.0) pass the check to
 
 ### Unknowns the research left open
 
-- Snowflake bill percentiles and edition mix. The cost model for the median workload rests on reported contract data (a roughly $100k median against a roughly $336k mean per customer). Phase 0 replaces estimates with a design partner's real bills.
+- Snowflake bill percentiles and edition mix. The cost model for the median workload rests on reported contract data (a roughly $100k median against a roughly $336k mean per customer). The cost model gets rebuilt from real user bills after launch; before launch it rests on published Snowflake pricing applied to our reference workloads.
 - MotherDuck customers and revenue. The closest competitor's traction is unmeasured, so the differentiation window is a judgment call.
-- Independent price-performance benchmarks at small scale. Vendor benchmark wars (Databricks against Snowflake, ClickHouse against everyone) are disputed by construction. opensnow needs its own reproducible benchmark on design-partner workloads before it claims speed in public.
+- Independent price-performance benchmarks at small scale. Vendor benchmark wars (Databricks against Snowflake, ClickHouse against everyone) are disputed by construction. opensnow needs its own reproducible benchmark on the reference workload set before it claims speed in public.
 - Iceberg v3 adoption timing. The v2 default holds until engine support evens out. Nobody in the research could date that.
 - Whether agent-created projects convert to paid workloads at scale. Neon and Supabase show the creation numbers. Public conversion numbers do not exist yet. Gate 2 is our own measurement of exactly this.
 
-### Holes Tom needs to fill
+### Operating model (decided Nov 5, 2026)
 
-- The D-01 to D-06 rulings themselves (Section 9).
-- The team and funding shape. The business case shows what the clone cost others (Firebolt raised $269M and stalled) and what the hosted layer cost MotherDuck ($100M). The wedge budget and hiring plan are unfilled, and Gate 1 scope depends on them.
-- Which cloud hosts v1 (tied to D-05) and which design partner goes first (Phase 0).
+- Team: Tom plus the Muse and Codex building loop, the same way OpenSight and freeDMS are built. No hires, no outside funding, no design partner. Gate 1 scope is sized to that loop.
+- First cloud: AWS (under D-05).
+- Gate 1 validation runs on reference workloads we build ourselves, priced against published Snowflake rates, with our real AWS bills as the cost side.
