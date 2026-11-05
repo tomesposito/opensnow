@@ -4,7 +4,7 @@ A better, faster, freer version of Snowflake. Codename only, until a better name
 
 Snowflake proved the shape: separate storage from compute, delete the DBA job, and make time travel, cloning, and sharing metadata operations. What it did not do is stay cheap, stay simple, or open up. opensnow keeps the shape and fixes those three.
 
-Status: research and business case complete. Verdict: GO SMALLER (see docs/BUSINESS-CASE.md). No code yet. The next step is the solution design, which needs approval before any build starts.
+Status: research and business case complete. Verdict: GO SMALLER (see docs/BUSINESS-CASE.md). Solution design approved Nov 5, 2026, with D-01 to D-06 decided (see SOLUTION_DESIGN.md and docs/DECISIONS.md). No code yet. Next: the Phase 0 storage spike and the Gate 1 prototype.
 
 ## Principles
 
@@ -17,8 +17,9 @@ Four, set by Tom on Nov 5, 2026. They outrank anything else in this repo.
 
 ## Docs
 
+- SOLUTION_DESIGN.md — vision, architecture, and the decided design (living document)
 - docs/BUSINESS-CASE.md — the scored case, verdict, gates, and kill criteria
-- docs/DECISIONS.md — the open decision queue for the solution design
+- docs/DECISIONS.md — the decision queue for the solution design (D-01 to D-06 decided)
 - docs/research/01-snowflake-research.md — what Snowflake is, why users love it, where it leaks
 - docs/research/02-technical-architecture-research.md — engines, table formats, catalogs, and four build archetypes
 - docs/research/03-business-case-research.md — market, pricing, competition, funding evidence
