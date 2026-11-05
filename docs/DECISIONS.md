@@ -38,7 +38,7 @@ Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
 Context: the wedge can be hosted-only (one cloud, one region), self-host first, or both. MotherDuck's lesson is that hosted convenience is what people pay for; the OSS lesson is that self-host is what makes it spread.
 
-Recommendation: both, but in order: the same artifact self-hosts free, and the hosted version is that artifact run by us. Hosted starts on one cloud.
+Recommendation: both, but in order: the same artifact self-hosts free, and the hosted version is that artifact run by us. Hosted starts on one cloud. First cloud: AWS (Tom, Nov 5, 2026).
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
