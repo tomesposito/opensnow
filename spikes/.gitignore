@@ -1,0 +1,14 @@
+**/target/
+**/venv/
+**/.venv/
+**/.rustup/
+**/.cargo/
+**/rustup/
+**/cargo/
+**/data/
+**/warehouse/
+**/warehouse-rs/
+**/duckdb-ref/
+**/__pycache__/
+*.duckdb
+*.parquet

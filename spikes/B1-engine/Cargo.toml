@@ -1,0 +1,11 @@
+[package]
+name = "b1-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+datafusion = "55"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[profile.release]
+debug = false

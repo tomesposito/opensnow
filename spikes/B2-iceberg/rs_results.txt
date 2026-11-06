@@ -1,0 +1,20 @@
+OK   sql_catalog_sqlite: loaded
+OK   create_namespace: db
+OK   df_catalog_provider: built
+OK   df_create_table: created
+OK   list_tables_after_ddl: tables: [TableIdent { namespace: NamespaceIdent(["db"]), name: "events" }]
+OK   df_insert_100k: inserted
+OK   df_count_after_write: 100000
+OK   snapshot1: 5627625100965907760
+OK   df_append_50k: appended
+OK   df_count_after_append: 150000
+OK   time_travel_iceberg_api: rows at snapshot1 = 100000
+FAIL df_delete: DELETE operation on table 'ice.db.events'
+caused by
+This feature is not implemented: DELETE not supported for Base table
+FAIL df_update: UPDATE operation on table 'ice.db.events'
+caused by
+This feature is not implemented: UPDATE not supported for Base table
+OK   df_count_final: 150000
+FAIL rest_catalog_client: client built; list failed as expected without server: Unexpected => Failed to execute http request, source: error sending request for url (http://127.0.0.1:8181/v1/config?warehouse=%2Fhome%2Fhatch%2Fworkspace%2Fprojects%2Fopensnow%2Fspikes%2FB2-iceberg%2Fwarehouse-rs)
+DONE

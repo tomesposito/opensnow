@@ -37,7 +37,7 @@ Serve the median Snowflake workload (about $100k a year) for $10k to $30k a year
 
 Written before any build. Both must pass before this case scales up.
 
-- **Gate 1:** a DuckDB-centric prototype serves a representative workload set (built by us, modeled on documented Snowflake usage; no design partner, per Tom's ruling on Nov 5, 2026) at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
+- **Gate 1:** a prototype of our own engine (DataFusion-based, per the D-01 revision) serves a representative workload set (built by us, modeled on documented Snowflake usage; no design partner, per Tom's ruling on Nov 5, 2026) at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
 - **Gate 2:** 10 paying orgs at full price, no discount doing the work, converted from the free tier at 1% or better.
 
 ## Kill / park criteria
@@ -52,3 +52,7 @@ Park if any two hold:
 ## What could not be verified
 
 Snowflake bill percentiles and edition mix; deduplicated warehouse-user counts by segment; MotherDuck customers or revenue; BigQuery and Redshift revenue (not disclosed); independent price-performance benchmarks at small scale; Snowflake churn decomposition. The case does not depend on any of these, but the Gate 1 cost model rests on published Snowflake pricing applied to our reference workloads until real user bills exist after launch.
+
+## Amendment (Nov 5, 2026)
+
+Tom revised D-01 the same day this case was written: DuckDB is reference only, and the engine is our own, built on DataFusion (Archetype B). That lowers two scores in substance: build cost / reuse falls (the engine core is now a build, with component reuse from DataFusion rather than a borrowed engine), and low risk falls with it. The rough re-score lands in the mid-50s out of 90. The verdict stands at GO SMALLER: the wedge, pricing, and distribution arguments in this case never depended on borrowing an engine. Gate 1 above is reworded to match; its bar (about a tenth of Snowflake cost, no distributed execution) is unchanged. Phase 0 spikes B1 to B3 (in the repo under spikes/) support the revised shape: DataFusion ran the reference query shapes at reference-class speed, Iceberg create/append/read/time-travel worked in Rust with row-level writes and compaction as named builds, and the dialect compatibility scope is measured.

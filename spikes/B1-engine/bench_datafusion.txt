@@ -1,0 +1,6 @@
+BENCH | Q1 scan + filter + aggregate | median_ms=50.0 | runs_ms=["42.1", "50.0", "72.5"] | rows=1
+BENCH | Q2 group by region and month | median_ms=94.2 | runs_ms=["93.9", "94.2", "105.9"] | rows=180
+BENCH | Q3 join + aggregate by category | median_ms=75.2 | runs_ms=["41.7", "75.2", "82.2"] | rows=4
+BENCH | Q4 sort + top-N | median_ms=70.4 | runs_ms=["42.8", "70.4", "79.0"] | rows=10
+BENCH | Q5 window: top 3 orders per customer by revenue | median_ms=862.7 | runs_ms=["810.5", "862.7", "892.2"] | rows=150001
+BENCH | Q6 CTE + subquery: months above average monthly revenue | median_ms=140.6 | runs_ms=["132.4", "140.6", "164.6"] | rows=12

@@ -1,0 +1,33 @@
+OK   create_namespace: db
+OK   create_table_v2: events(
+  1: id: required long,
+  2: city: optional string,
+  3: amount: optional double
+),
+partition by: [city],
+sort order: [],
+snapshot: null
+OK   format_version: 2
+OK   write_100k: 100000
+OK   snapshot_after_write: 7119621505876077831
+OK   append_50k: 150000
+OK   snapshot_after_append: 6321060333405164894
+OK   time_travel_snap1_count: 100000
+OK   time_travel_snap1_cities: ['NYC']
+OK   row_delete_id_lt_1000: (None, 'deleted id=5 attempted')
+OK   count_after_delete_attempt: 149999
+OK   id5_present: False
+FAIL upsert_id10: AttributeError: 'UpsertResult' object has no attribute 'rows_matching'
+OK   create_table_small: small(
+  1: id: required long,
+  2: city: optional string,
+  3: amount: optional double
+),
+partition by: [],
+sort order: [],
+snapshot: null
+OK   small_50_appends_rows: 500
+OK   small_table_data_files: 50
+OK   main_table_data_files: 3
+OK   small_snapshots_count: 50
+OK   pyiceberg_compaction_api: none on Table

@@ -1,0 +1,31 @@
+-- GROUP: snowflake
+-- TEST: SF01_QUALIFY
+SELECT id, name, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn FROM employees QUALIFY rn = 1;
+-- TEST: SF02_FLATTEN
+SELECT f.value FROM events e, LATERAL FLATTEN(input => e.payload) f;
+-- TEST: SF03_COLON_PATH
+SELECT payload:a AS a_val FROM events;
+-- TEST: SF04_DATEADD
+SELECT DATEADD(day, 7, hire_date) AS plus_week FROM employees;
+-- TEST: SF05_DATEDIFF
+SELECT DATEDIFF(day, hire_date, DATE '2025-01-01') AS days_diff FROM employees;
+-- TEST: SF06_CLONE
+CREATE TABLE employees_clone CLONE employees;
+-- TEST: SF07_TIME_TRAVEL_AT
+SELECT * FROM employees AT (TIMESTAMP => TIMESTAMP '2024-01-01 00:00:00');
+-- TEST: SF08_SAMPLE
+SELECT * FROM employees SAMPLE (50);
+-- TEST: SF09_ILIKE
+SELECT name FROM employees WHERE dept ILIKE 'ENG';
+-- TEST: SF10_CLUSTER_BY
+CREATE TABLE t2 (id INT, d DATE) CLUSTER BY (d);
+-- TEST: SF11_OBJECT_CONSTRUCT
+SELECT OBJECT_CONSTRUCT('a', 1, 'b', 2) AS obj;
+-- TEST: SF12_ARRAY_CONSTRUCT
+SELECT ARRAY_CONSTRUCT(1, 2, 3) AS arr;
+-- TEST: SF13_TRY_CAST
+SELECT TRY_CAST('not-a-number' AS INT) AS n;
+-- TEST: SF14_DIV0
+SELECT DIV0(10, 0) AS safe_div;
+-- TEST: SF15_PIVOT
+SELECT * FROM employees PIVOT (SUM(salary) FOR dept IN ('eng', 'sales'));

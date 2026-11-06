@@ -1,0 +1,24 @@
+--- Q1
+Run Time (s): real 0.106 user 0.091497 sys 0.006241
+Run Time (s): real 0.080 user 0.048403 sys 0.003697
+Run Time (s): real 0.061 user 0.045840 sys 0.003078
+--- Q2
+Run Time (s): real 0.120 user 0.132295 sys 0.003749
+Run Time (s): real 0.161 user 0.131787 sys 0.004761
+Run Time (s): real 0.157 user 0.136053 sys 0.004887
+--- Q3
+Run Time (s): real 0.032 user 0.053326 sys 0.003974
+Run Time (s): real 0.064 user 0.051328 sys 0.001830
+Run Time (s): real 0.032 user 0.051556 sys 0.003964
+--- Q4
+Run Time (s): real 0.076 user 0.059987 sys 0.008095
+Run Time (s): real 0.084 user 0.056692 sys 0.006612
+Run Time (s): real 0.088 user 0.064376 sys 0.004250
+--- Q5
+Run Time (s): real 0.417 user 0.424629 sys 0.054993
+Run Time (s): real 0.384 user 0.444619 sys 0.050155
+Run Time (s): real 0.391 user 0.456908 sys 0.050574
+--- Q6
+Run Time (s): real 0.095 user 0.114939 sys 0.004029
+Run Time (s): real 0.124 user 0.154005 sys 0.010872
+Run Time (s): real 0.096 user 0.115776 sys 0.005058
