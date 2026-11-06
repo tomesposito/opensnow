@@ -6,6 +6,8 @@ Decisions for the solution design. Tom approved the recommendations for D-01 to 
 
 REVISED by Tom, Nov 5, 2026: DuckDB is reference only. We study it, we benchmark against it, we do not build on it. The engine is our own: Archetype B (DataFusion-native) is the working basis. The earlier Archetype A ruling below is superseded. Consequences recorded in SOLUTION_DESIGN.md: the DuckLake sub-study is closed (DuckLake is DuckDB-coupled), Iceberg stands as the storage default, Gate 1 is re-scoped to a single-node version of our own engine, and multi-node work moves to Phase 3 as planned scale work on our own engine rather than an archetype switch.
 
+AMENDED by Tom, Nov 5, 2026: DataFusion stays, but as replaceable parts we swap out as measurements demand. Extension points first, a pinned fork carrying a small patch set second (Apache-2.0 allows the fork), our own component when the gap is structural. A ground-up engine was considered and not chosen: the cost is years before Gate 1, for kernel headroom the wedge does not need yet.
+
 ## D-01 (superseded text, kept for the record) — Starting engine archetype
 
 Context: four archetypes from the technical research (docs/research/02). A: DuckDB-centric, one engine instance per tenant. B: DataFusion-native, built for multi-node. C: adopt ClickHouse. D: Iceberg + Trino + Spark assembly.
