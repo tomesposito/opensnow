@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/stack-check"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+datafusion = "=54.1.0"
+arrow = "=58.4.1"
+iceberg = "=0.11.0"
+iceberg-datafusion = "=0.11.0"
+iceberg-catalog-sql = "=0.11.0"
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread"] }
+futures = "=0.3.34"
+tempfile = "=3.27.0"
+# The catalog enables no SQLx runtime. Supply it in the consumer.
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "any"] }
+opensnow-engine = { path = "crates/opensnow-engine" }
+opensnow-storage = { path = "crates/opensnow-storage" }
+
+[profile.dev]
+debug = 0

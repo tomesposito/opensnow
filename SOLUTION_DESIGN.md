@@ -269,6 +269,8 @@ That puts Gate 1 roughly 2 to 3 months out and a credible multi-node engine insi
 
 ### Phase 1: Gate 1
 
+Slice 1.1 pins DataFusion 54.1.0 and Iceberg 0.11.0; see [the stack record](docs/PINNED-STACK.md) for the combined harness and upgrade trigger.
+
 Build the thinnest end-to-end slice of our own engine: DataFusion core with our planner integration and resource groups, single-node, Iceberg storage with compaction, Postgres control plane, worksheets and navigation in the UI, metering with per-query costs, the MCP server and local mode from Section 6.
 
 **Gate 1 passes when** the prototype serves the reference workload set at about a tenth of its Snowflake cost, on Snowflake's own arithmetic, without needing distributed execution.
