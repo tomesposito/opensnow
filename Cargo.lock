@@ -3052,6 +3052,8 @@ name = "opensnow-engine"
 version = "0.1.0"
 dependencies = [
  "datafusion",
+ "futures",
+ "tokio",
 ]
 
 [[package]]

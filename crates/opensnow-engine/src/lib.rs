@@ -1,4 +1,9 @@
-//! Session setup and a self-contained analytical compatibility check.
+//! Tenant SQL service and analytical compatibility checks. See docs/ENGINE-SERVICE.md.
+mod service;
+pub use service::*;
+mod yardstick;
+#[cfg(test)]
+mod tests;
 use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Float64Array};
 use datafusion::arrow::datatypes::DataType;
@@ -11,11 +16,15 @@ use datafusion::prelude::*;
 
 /// Each tenant receives its own context and 64 MiB memory pool.
 pub fn session() -> Result<SessionContext> {
+    session_with_limits(64 * 1024 * 1024, 2)
+}
+
+fn session_with_limits(memory_bytes: usize, target_partitions: usize) -> Result<SessionContext> {
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024 * 1024)))
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_bytes)))
         .build_arc()?;
     let ctx = SessionContext::new_with_config_rt(
-        SessionConfig::new().with_target_partitions(2), runtime);
+        SessionConfig::new().with_target_partitions(target_partitions), runtime);
     ctx.register_udf(net_price_udf());
     Ok(ctx)
 }
@@ -83,6 +92,7 @@ pub async fn check() -> Result<()> {
     let actual = as_float64_array(batches[0].column(0))?.value(0);
     assert!((actual - expected).abs() < 1e-9, "net revenue: {actual} != {expected}");
     println!("PASS B1 net_price: {actual} equals plain Rust {expected}");
+    yardstick::check(&ctx).await?;
     println!("PASS B1 path: six analytical shapes and independent revenue check");
     Ok(())
 }
