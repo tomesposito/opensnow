@@ -13,3 +13,7 @@ iceberg-catalog-sql.workspace = true
 futures.workspace = true
 tempfile.workspace = true
 sqlx.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

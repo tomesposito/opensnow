@@ -22,9 +22,10 @@ All versions below are exact workspace pins. Cargo.lock pins the rest.
 | futures | 0.3.34 | crates.io | MIT OR Apache-2.0 |
 | tempfile | 3.27.0 | crates.io | MIT OR Apache-2.0 |
 | sqlx | 0.8.6 | crates.io | MIT OR Apache-2.0 |
+| uuid | 1.29.0 | crates.io | MIT OR Apache-2.0 |
 
 The three opensnow crates use Apache-2.0. SQLx explicitly enables
-runtime-tokio, sqlite, and any, with default features off. Without the
+runtime-tokio, sqlite, postgres, and any, with default features off. Without the
 runtime feature, the SQL catalog panics at connection time.
 
 ## Candidate A
@@ -154,3 +155,25 @@ This avoids paying the spikes' roughly two-hour cold build on every run.
 The local harness was built with debug info off, as in B2. No fmt or clippy
 gate was added: those components are absent from the installed toolchain.
 CI itself has not been run locally.
+
+## Slice 1.3 dependency update
+
+SQLx keeps its exact 0.8.6 pin and adds the postgres driver feature.
+UUID is now a direct exact 1.29.0 workspace pin with v7 enabled for fresh
+clone identities. Its cached manifest declares Apache-2.0 OR MIT. SQLx
+remains MIT OR Apache-2.0. No other direct dependency was added.
+
+Slice 1.3 verification (Nov 7, 2026): `cargo test --workspace --offline`
+passed 11 tests: 8 engine tests, 2 storage integration tests, and
+`combined_stack`, with 0 failures and 0 ignored tests. The new tests are
+`sqlite_round_trip_time_travel_and_clone` and
+`postgres_round_trip_time_travel_and_clone`. The latter executed against
+localhost:5433 and printed `PASS Postgres catalog round trip`. Doc-tests
+also passed (0 tests). Localhost access requires running outside the network
+sandbox. Integration tests use two-worker Tokio runtimes for the provider's
+synchronous-to-async table-registration bridge.
+
+`cargo run -p stack-check --offline` exited 0 with the existing B1 and B2
+PASS lines. Both inverse tree checks show one version, datafusion 54.1.0
+and arrow 58.4.1. The full tree contains no DuckDB. Cargo.lock still has
+477 packages and no git sources.

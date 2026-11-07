@@ -17,7 +17,8 @@ tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread"] }
 futures = "=0.3.34"
 tempfile = "=3.27.0"
 # The catalog enables no SQLx runtime. Supply it in the consumer.
-sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "any"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "any"] }
+uuid = { version = "=1.29.0", features = ["v7"] }
 opensnow-engine = { path = "crates/opensnow-engine" }
 opensnow-storage = { path = "crates/opensnow-storage" }
 
