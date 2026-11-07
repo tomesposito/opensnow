@@ -1,4 +1,6 @@
-//! Local SQL catalog, DataFusion provider, and Iceberg snapshot proof.
+//! Local SQL catalog, DataFusion provider, and Iceberg copy-on-write mutations.
+//! The pinned vendored Iceberg patch supplies an atomic overwrite transaction.
+mod writer;
 use std::{collections::HashMap, sync::Arc};
 use arrow::array::Int64Array;
 use datafusion::prelude::*;
@@ -179,25 +181,3 @@ impl StorageCatalog {
         Ok(clone)
     }
 }
-
-/// Compile-time evidence for the Iceberg 0.11 copy-on-write blocker.
-///
-/// The transaction action trait cannot be implemented outside iceberg:
-///
-/// ```compile_fail,E0603
-/// use iceberg::transaction::TransactionAction;
-/// ```
-///
-/// A custom manifest swap cannot construct a catalog commit either:
-///
-/// ```compile_fail,E0624
-/// use iceberg::{TableCommit, TableIdent};
-/// let commit = TableCommit::builder()
-///     .ident(TableIdent::from_strs(["db", "events"]).unwrap())
-///     .requirements(vec![])
-///     .updates(vec![])
-///     .build();
-/// ```
-///
-/// See `docs/STORAGE.md` for the supported API investigation and next step.
-pub mod cow_api_blocker {}

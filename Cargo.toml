@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/iceberg-0.11.0"]
 members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/stack-check"]
 
 [workspace.package]
@@ -24,3 +25,6 @@ opensnow-storage = { path = "crates/opensnow-storage" }
 
 [profile.dev]
 debug = 0
+
+[patch.crates-io]
+iceberg = { path = "vendor/iceberg-0.11.0" }

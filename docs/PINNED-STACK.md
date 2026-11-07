@@ -3,9 +3,11 @@
 Slice 1.1, issue #4. Checked locally on Nov 6, 2026.
 
 Use Candidate B: DataFusion 54.1.0 with Iceberg 0.11.0. The shipped
-provider and both harness paths share one dependency tree. All external
-sources in Cargo.lock are crates.io registry sources. No DuckDB dependency
-or fork is needed. This uses the public extension points required by D-01.
+provider and both harness paths share one dependency tree. Iceberg 0.11.0
+is now a vendored path dependency under Tom's Nov 7 ruling for issue #7.
+Every other external source in Cargo.lock stays on crates.io. There are no
+git sources, version bumps, or DuckDB dependencies. This applies D-01's
+pinned fork and small patch set rule.
 
 ## Pins and direct dependency licenses
 
@@ -15,7 +17,7 @@ All versions below are exact workspace pins. Cargo.lock pins the rest.
 | --- | --- | --- | --- |
 | datafusion | 54.1.0 | crates.io | Apache-2.0 |
 | arrow | 58.4.1 | crates.io | Apache-2.0 |
-| iceberg | 0.11.0 | crates.io | Apache-2.0 |
+| iceberg | 0.11.0 | vendor/iceberg-0.11.0 | Apache-2.0 |
 | iceberg-datafusion | 0.11.0 | crates.io | Apache-2.0 |
 | iceberg-catalog-sql | 0.11.0 | crates.io | Apache-2.0 |
 | tokio | 1.54.1 | crates.io | MIT |
@@ -48,10 +50,13 @@ not evidence of an API defect. The attempt stayed within the 25-minute
 setup budget. Candidate A does not meet the reproducibility requirement
 on this VM. We did not substitute an unverified revision.
 
-Upgrade when datafusion-iceberg has a crates.io release for DataFusion 55
-or the then-current DataFusion. Require a registry-only lock with one
-DataFusion and Arrow version, the same combined test passing, and a fresh
-license check. A git dependency needs a separate written D-01 justification.
+The upgrade signal is an Iceberg release whose transaction module exposes
+a public overwrite or replace-files action. Return to registry Iceberg and
+drop the patch when the combined harness and writer tests pass on that
+release. Keep one DataFusion and Arrow version, restore registry sources
+for all external packages, and repeat the license check. A version number
+alone is not the trigger. A git dependency needs a separate written D-01
+justification.
 
 ## Reproduce
 
@@ -177,3 +182,49 @@ synchronous-to-async table-registration bridge.
 PASS lines. Both inverse tree checks show one version, datafusion 54.1.0
 and arrow 58.4.1. The full tree contains no DuckDB. Cargo.lock still has
 477 packages and no git sources.
+
+## Slice 1.4 vendored overwrite patch
+
+Root Cargo.toml patches crates.io iceberg to `vendor/iceberg-0.11.0` and
+excludes that directory from workspace membership. Its shipped Cargo.toml
+and version are unchanged. LICENSE, NOTICE, README, source, and testdata are
+preserved. The registry checksum file is omitted. The root lockfile records
+Iceberg as a path source. All package versions remain identical.
+
+The maintenance rule is a byte comparison against the cached pristine
+0.11.0 package. Only these source files may differ:
+
+- `src/transaction/overwrite.rs`: new public OverwriteAction with file adds,
+  removals, commit UUID, and snapshot properties.
+- `src/transaction/mod.rs`: module registration, export, and Transaction::overwrite.
+- `src/transaction/snapshot.rs`: explicit removals, manifest rewrites, pure
+  deletes, empty overwrites, and accurate summary deltas.
+
+Do not edit any other vendored file. Keep this patch suitable for upstream
+review. Added files use the existing append validation and duplicate check.
+A removal must still be a live file with identical metadata at commit time.
+Manifests without removals pass through unchanged. Rewritten manifests mark
+removed live entries deleted and preserve kept entries' snapshot and sequence
+numbers. Older deleted entries in a rewritten manifest are omitted; older
+snapshots still reference their original immutable manifests.
+
+The cached summary helper's third argument is `truncate_full_table`, not an
+`is_overwrite` flag. Passing true would count every prior row as removed,
+including untouched files. The patch uses explicit remove_file accounting
+and passes false for delta totals. The snapshot operation is Overwrite.
+Writer tests verify total records, files, bytes, and zero delete files.
+
+The writer uses Iceberg's per-file Arrow reader and its Parquet writer stack.
+No direct Parquet dependency or other new external dependency is needed.
+The obsolete blocker test and compile-fail doctests are removed.
+
+Slice 1.4 verification (Nov 7, 2026):
+`cargo test --workspace --offline --locked -- --nocapture` passed 22 tests:
+8 engine, 2 catalog, 11 writer, and 1 combined stack. There were 0 failures,
+0 ignored tests, and 0 doctests. The Postgres test connected to localhost:5433
+and printed `PASS Postgres catalog round trip`. The new writer suite ran
+against fresh temporary SQLite catalogs and filesystem warehouses.
+All 477 lockfile package names and versions match the previous lockfile.
+Only Iceberg's source and registry checksum fields changed. Byte comparison
+against the cached source confirmed exactly the three patch files above;
+all other vendored files, including Cargo.toml, match.

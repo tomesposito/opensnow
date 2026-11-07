@@ -2,13 +2,28 @@
 
 Decisions for the solution design. Tom approved the recommendations for D-01 to D-06 on Nov 5, 2026; each is marked DECIDED below.
 
-## D-01 — Starting engine archetype
+## D-01: Starting engine archetype
 
 REVISED by Tom, Nov 5, 2026: DuckDB is reference only. We study it, we benchmark against it, we do not build on it. The engine is our own: Archetype B (DataFusion-native) is the working basis. The earlier Archetype A ruling below is superseded. Consequences recorded in SOLUTION_DESIGN.md: the DuckLake sub-study is closed (DuckLake is DuckDB-coupled), Iceberg stands as the storage default, Gate 1 is re-scoped to a single-node version of our own engine, and multi-node work moves to Phase 3 as planned scale work on our own engine rather than an archetype switch.
 
 AMENDED by Tom, Nov 5, 2026: DataFusion stays, but as replaceable parts we swap out as measurements demand. Extension points first; general improvements get contributed upstream; a pinned fork carrying a small patch set covers what upstream has not taken yet (Apache-2.0 allows the fork); our own component when the gap is structural. A ground-up engine was considered and not chosen: the cost is years before Gate 1, for kernel headroom the wedge does not need yet.
 
-## D-01 (superseded text, kept for the record) — Starting engine archetype
+AMENDED by Tom, Nov 7, 2026 (issue #7): option 1 is closed. Iceberg
+0.11.0 is the newest crates.io release checked for this ruling. Its public
+transaction module has no overwrite or replace-files action. The matching
+iceberg-datafusion release is also 0.11.0, paired with DataFusion 54.
+Build option 2: vendor the cached iceberg 0.11.0 source and use a
+`[patch.crates-io]` path dependency. Keep the patch small: one public overwrite
+action modeled on FastAppend, through the normal atomic catalog commit.
+Apply the D-01 pattern to Iceberg: a pinned fork, a small patch set, and code
+prepared as an upstream contribution with ASF headers and public API docs.
+The copy-on-write writer remains the structural gap named by spike B2.
+Do not use drop-plus-register or direct catalog edits for mutations.
+Return to registry Iceberg when a release exposes a public overwrite or
+replace-files transaction action and the combined harness and writer tests
+pass. Drop the patch then.
+
+## D-01 (superseded text, kept for the record): Starting engine archetype
 
 Context: four archetypes from the technical research (docs/research/02). A: DuckDB-centric, one engine instance per tenant. B: DataFusion-native, built for multi-node. C: adopt ClickHouse. D: Iceberg + Trino + Spark assembly.
 
@@ -16,7 +31,7 @@ Recommendation: A to start, because Gate 1 tests exactly it, it is the fastest p
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-02 — SQL dialect
+## D-02: SQL dialect
 
 Context: the real tension in the research. Agents generate Postgres-flavored SQL best, because it is dense in training data. Snowflake migrants expect Snowflake-flavored SQL. Principle 3 says familiar syntax; the agent research says Postgres density is distribution.
 
@@ -24,7 +39,7 @@ Recommendation: Postgres-compatible core syntax, with a Snowflake-compatibility 
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-03 — Experience layer sequencing
+## D-03: Experience layer sequencing
 
 Context: Principle 4 makes the experience part of the product: data navigation, SQL worksheets, simple built-in analytics, a built-in dbt engine, hybrid tables.
 
@@ -32,7 +47,7 @@ Recommendation: navigation, worksheets, and simple analytics in the wedge (they 
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-04 — License
+## D-04: License
 
 Context: freeness is part of the pitch. DuckDB is MIT; several components in the stack are Apache-2.0; some adjacent projects are AGPL or source-available and must be kept out of the core.
 
@@ -40,7 +55,7 @@ Recommendation: Apache-2.0 for opensnow itself, with a license check on every de
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-05 — Hosting model for v1
+## D-05: Hosting model for v1
 
 Context: the wedge can be hosted-only (one cloud, one region), self-host first, or both. MotherDuck's lesson is that hosted convenience is what people pay for; the OSS lesson is that self-host is what makes it spread.
 
@@ -48,7 +63,7 @@ Recommendation: both, but in order: the same artifact self-hosts free, and the h
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-06 — The name
+## D-06: The name
 
 Context: opensnow is a codename. It is close to Snowflake's marks and probably cannot ship as the product name.
 
@@ -56,6 +71,6 @@ Recommendation: keep the codename for the build phase; run the naming decision b
 
 Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 
-## D-01 sub-study — DuckLake vs the Iceberg default
+## D-01 sub-study: DuckLake vs the Iceberg default
 
 Queued Nov 5, 2026 under the D-01 ruling. The technical research (docs/research/02) calls DuckLake a core candidate for Archetype A: metadata in Postgres, Parquet in object storage, commit as one SQL transaction, the closest live experiment to Snowflake's metadata-in-a-database design. The design defaults to Iceberg (portable, engine-neutral, the exit ramp to Archetype B). Evaluate DuckLake against that default during the Phase 0 storage spike on: multi-engine access, time travel and clone semantics, compaction story, and exit cost if opensnow later moves to Archetype B. Finding goes to Tom as an amendment to D-01, not a silent swap.

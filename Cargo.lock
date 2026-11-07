@@ -2324,8 +2324,6 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25dd5d1aa2fa92d2c9bc426f72bc16717a27eb73255805beb8845afcca31e58d"
 dependencies = [
  "aes-gcm",
  "anyhow",
