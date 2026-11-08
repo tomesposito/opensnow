@@ -228,3 +228,15 @@ All 477 lockfile package names and versions match the previous lockfile.
 Only Iceberg's source and registry checksum fields changed. Byte comparison
 against the cached source confirmed exactly the three patch files above;
 all other vendored files, including Cargo.toml, match.
+
+## Slice 1.5 verification
+
+`cargo test --workspace --offline -- --nocapture` passed 27 tests:
+8 engine, 2 catalog, 5 maintenance, 11 writer, and 1 combined stack.
+There were 0 failures, 0 ignored tests, and 0 doctests. The Postgres test
+connected to localhost:5433 and printed `PASS Postgres catalog round trip`.
+The run needed local socket access outside the network sandbox.
+The maintenance fixture compacted 50 files and 500 rows to one file under
+its 64 KiB target. Its five test names are recorded in
+`crates/opensnow-storage/tests/maintenance.rs`. No dependency, lockfile,
+version, or vendored source changed.

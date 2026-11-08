@@ -134,7 +134,7 @@ fn frame(schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<DataFrame> {
     Ok(ctx.read_table(Arc::new(MemTable::try_new(schema, vec![batches])?))?)
 }
 
-fn normalize(schema: &SchemaRef, batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
+pub(crate) fn normalize(schema: &SchemaRef, batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
     batches.into_iter().map(|batch| {
         if batch.num_columns() != schema.fields().len() {
             return Err("replacement schema must match the table".into());
@@ -153,7 +153,7 @@ fn normalize(schema: &SchemaRef, batches: Vec<RecordBatch>) -> Result<Vec<Record
     }).collect()
 }
 
-fn schema(table: &Table) -> Result<SchemaRef> {
+pub(crate) fn schema(table: &Table) -> Result<SchemaRef> {
     if table.metadata().format_version() != FormatVersion::V2
         || table.metadata().partition_specs_iter().any(|spec| !spec.is_unpartitioned()) {
         return Err("copy-on-write currently supports unpartitioned Iceberg v2 tables".into());
@@ -166,7 +166,7 @@ fn schema(table: &Table) -> Result<SchemaRef> {
 
 // FileScanTask exposes paths, not DataFile values in the pinned crate. Resolve
 // the exact live objects from the same snapshot's manifests for the delete set.
-async fn data_files(table: &Table) -> Result<HashMap<String, DataFile>> {
+pub(crate) async fn data_files(table: &Table) -> Result<HashMap<String, DataFile>> {
     let mut files = HashMap::new();
     if let Some(snapshot) = table.metadata().current_snapshot() {
         let list = table.manifest_list_reader(snapshot).load().await?;
@@ -186,11 +186,21 @@ async fn data_files(table: &Table) -> Result<HashMap<String, DataFile>> {
     Ok(files)
 }
 
+pub(crate) async fn read_file(table: &Table, tasks: Vec<FileScanTask>) -> Result<Vec<RecordBatch>> {
+    Ok(table.reader_builder().build()
+        .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))?.stream()
+        .try_collect().await?)
+}
+
 async fn write(table: &Table, batches: Vec<RecordBatch>) -> Result<Vec<DataFile>> {
+    write_sized(table, batches, iceberg::spec::TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT).await
+}
+
+pub(crate) async fn write_sized(table: &Table, batches: Vec<RecordBatch>, target: usize) -> Result<Vec<DataFile>> {
     let parquet = ParquetWriterBuilder::from_table_properties(
         &table.metadata().table_properties(), table.current_schema_ref())?;
-    let rolling = RollingFileWriterBuilder::new_with_default_file_size(
-        parquet, table.file_io().clone(), DefaultLocationGenerator::new(table.metadata())?,
+    let rolling = RollingFileWriterBuilder::new(
+        parquet, target, table.file_io().clone(), DefaultLocationGenerator::new(table.metadata())?,
         DefaultFileNameGenerator::new(uuid::Uuid::now_v7().to_string(), None, DataFileFormat::Parquet));
     let partition = PartitionKey::new(
         table.metadata().default_partition_spec().as_ref().clone(),
@@ -240,9 +250,7 @@ impl StorageCatalog {
         let mut removed = Vec::new();
         let mut added = Vec::new();
         for (path, tasks) in by_file {
-            let batches = table.reader_builder().build()
-                .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))?.stream()
-                .try_collect().await?;
+            let batches = read_file(&table, tasks).await?;
             let file_frame = frame(schema.clone(), normalize(&schema, batches)?)?;
             let matches = file_frame.clone().filter(predicate.clone())?.limit(0, Some(1))?.collect().await?;
             if matches.iter().all(|batch| batch.num_rows() == 0) { continue; }
@@ -269,7 +277,7 @@ impl StorageCatalog {
         self.commit_overwrite(&table, removed, added).await
     }
 
-    async fn commit_overwrite(&self, table: &Table, removed: Vec<DataFile>, added: Vec<DataFile>) -> Result<()> {
+    pub(crate) async fn commit_overwrite(&self, table: &Table, removed: Vec<DataFile>, added: Vec<DataFile>) -> Result<()> {
         let tx = Transaction::new(table);
         let tx = tx.overwrite().delete_data_files(removed).add_data_files(added).apply(tx)?;
         tx.commit(self.catalog.as_ref()).await?;

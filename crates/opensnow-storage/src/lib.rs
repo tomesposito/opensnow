@@ -1,6 +1,8 @@
 //! Local SQL catalog, DataFusion provider, and Iceberg copy-on-write mutations.
 //! The pinned vendored Iceberg patch supplies an atomic overwrite transaction.
 mod writer;
+mod maintenance;
+pub use maintenance::{MaintenancePolicy, MaintenanceReport};
 use std::{collections::HashMap, sync::Arc};
 use arrow::array::Int64Array;
 use datafusion::prelude::*;

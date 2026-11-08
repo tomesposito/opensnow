@@ -132,3 +132,86 @@ reuse, no-match no-ops, null predicates, simultaneous assignments, full-table
 DELETE, bulk and empty replacement, historical reads, snapshot counts and
 summaries, invalid SQL and values, mixed-manifest sequence preservation, and
 stale-removal rejection. See `crates/opensnow-storage/tests/writer.rs`.
+
+## Slice 1.5: compaction and maintenance
+
+`StorageCatalog::maintain(&TableIdent, &MaintenancePolicy)` runs one pass per
+table for a scheduler. There is no daemon loop in this slice. The policy
+has these defaults:
+
+- Target file size: 256 MiB, inside the design's 128 to 512 MB band.
+- Minimum file size: 128 MiB. Only files below this threshold and below
+  the target are candidates.
+- Reserved retention minimum: five snapshots. The optional expiry cutoff
+  is Unix milliseconds. Expiry is inactive, including when a cutoff is set.
+- Orphan grace period: 24 hours. This is reserved for future safe cleanup
+  and does not enable file deletion.
+
+The target, minimum size, and retained snapshot count must be positive.
+Candidates use deterministic first-fit decreasing bin packing by physical
+file size, with path ordering to break ties. Each bin's input bytes fit the
+target. Only bins with at least two files are rewritten. Files at or above
+target and files outside the candidate threshold keep their exact paths.
+No eligible bin means no compaction commit or new snapshot.
+
+The pass loads the current snapshot's live DataFiles and plans its scan
+tasks. It reuses the writer's manifest resolution, per-file Iceberg Arrow
+reader, schema normalization, and Parquet writer stack. Each bin is read
+in memory and written through DataFileWriterBuilder, ParquetWriterBuilder,
+RollingFileWriterBuilder with the policy target, and the default location
+and file name generators. The rolling writer checks buffered size between
+batches. The target is a sizing goal, not a hard byte cap for arbitrary
+rows, compression, batches, or Parquet footer sizes. There is no spill or
+memory budget yet.
+
+All bins share exactly one Transaction::overwrite action. It removes the
+old DataFiles and adds the merged DataFiles through the atomic catalog
+commit, then refreshes the provider. The overwrite patch validates removed
+files at commit time. Concurrent appends can survive; competing changes to
+removed files fail validation. Old files remain for historical reads and
+clones. Failed writes can leave unreferenced output files.
+
+`MaintenanceReport` counts rewritten input and output files, their physical
+bytes, expired snapshots, removed orphan files, and whether compaction
+committed a snapshot. Compaction counters describe the committed swap.
+Errors are returned. Failed commits can leave new unreferenced files.
+Expiry and orphan counters are always zero in this slice.
+
+Snapshot expiry does not ship. The pinned ExpireSnapshots action only
+removes metadata and leaves shared physical files intact. However, its
+per-branch retention settings override the requested retain_last and age
+cutoff, and TableMetadata has no public reference iterator or retention
+accessor. The service cannot validate those overrides or guarantee the
+policy's minimum and cutoff for all accepted tables through that action.
+No extra vendored action or dependency was added to bypass this gap.
+All snapshots and their files are retained. A test requests an aggressive
+cutoff and zero orphan grace, then verifies every source snapshot remains
+and both source history and the clone still return their exact rows.
+Cross-table reference coordination remains required before any future
+expiry path can be paired with physical cleanup.
+
+Physical orphan cleanup does not ship. The catalog can list tables, but
+there is no atomic cross-table reference registry or lock coordinating
+clone registration, writers, and deletion. Enumerating same-namespace
+clones and all their snapshots is not a stable protection set while a
+clone or a write can commit. A grace period alone cannot prove that an
+older unreferenced file will not be committed by a slow writer. Until that
+coordination exists, the service preserves every file and reports zero
+orphan removals. A test proves even zero grace leaves an unreferenced file
+alone. Historical and clone reads are also checked after maintenance.
+
+The overwrite action writes new manifests for swapped files. The pinned
+crate has no standalone manifest-rewrite action. Standalone manifest
+compaction does not ship in this slice.
+
+Bergman was evaluated on paper only. It is absent from Cargo.lock and
+would add an unpinned external dependency and a second maintenance engine.
+This slice keeps the vendored Iceberg stack and adds no dependency.
+
+Inherited limits are local filesystem warehouses, unpartitioned Iceberg
+v2, Parquet data files, no delete files, and no encrypted tables. Tests use
+SQLite and BIGINT values including NULL. They prove 50 ten-row appends
+compact from 50 files to one with a 64 KiB test target, exact 500-row
+results and history, one new snapshot, immediate no-op, exact large-file
+reuse, disabled expiry, disabled physical cleanup, and three bins plus
+one untouched singleton committed in one snapshot. These fixtures do not establish production throughput or a hard file size bound.

@@ -2,7 +2,7 @@
 
 Written Nov 5, 2026. Evidence in docs/research/03-business-case-research.md. Scored on the same 90-point rubric used for the Oct 31, 2026 market deep dive and the Principal PM case.
 
-## Verdict: GO SMALLER — 59/90
+## Verdict: GO SMALLER: 59/90
 
 Build the wedge, not the clone. A full Snowflake clone is a no-go: Firebolt raised $269M and still did not buy distribution against Snowflake and Databricks. The smaller version survives because the agent funnel, the open format, and open source do the distribution work that Snowflake buys with a sales force (44% of its revenue goes to sales and marketing).
 
