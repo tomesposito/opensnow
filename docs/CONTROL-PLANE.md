@@ -9,7 +9,7 @@ shipped in slice 1.9, issue #12; see docs/MCP.md.
 ## Schema
 
 Schema setup is plain SQL in the crate, applied by `ensure_schema`. It is
-idempotent and uses no migration framework. Four tables:
+idempotent and uses no migration framework. Five tables:
 
 - tenants: id (text primary key), name (unique), status (active,
   suspended, or deleted), cost_cap_units (nullable bigint), namespace
@@ -24,6 +24,10 @@ idempotent and uses no migration framework. Four tables:
   together, SQL text, kind, status, rows and bytes returned, elapsed
   milliseconds, vCPU-seconds, cost in dollars, start time. Added in
   slice 1.7, issue #10. See docs/METERING.md.
+- worksheets: id (text primary key), tenant_id (references tenants),
+  user_id (references users), name, sql_text, created_at, updated_at.
+  Added in slice 1.8, issue #11, for server-side saved worksheets.
+  See docs/WORKSHEETS-UI.md.
 
 Every tenant-scoped read filters by tenant id in the query itself.
 
@@ -117,7 +121,9 @@ and cost_summary read them back per tenant. See docs/METERING.md.
 ## Limits
 
 - HTTP transport and the MCP server shipped in slice 1.9, issue #12
-  (docs/MCP.md). There is still no UI in this crate; the UI is issue #11.
+  (docs/MCP.md). The worksheets and navigation UI shipped in slice
+  1.8, issue #11 (docs/WORKSHEETS-UI.md); it is served by the
+  transport, not by this crate.
 - Dollar metering records live in query_cost_records and are read back
   through cost_records and cost_summary (docs/METERING.md).
   Dollar-denominated budgets are not built; the enforced cap is still

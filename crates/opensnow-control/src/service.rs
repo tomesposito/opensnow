@@ -10,7 +10,7 @@ use sqlparser::{dialect::GenericDialect, parser::Parser};
 use tokio::sync::Mutex;
 use crate::credentials;
 use crate::store::{self, ControlStore, NewTenant, NewToken, NewUser};
-use crate::types::{ControlError, IssuedToken, Principal, ProvisionedTenant, Result, Role, TenantRecord, TenantStatus, TokenScope};
+use crate::types::{ControlError, IssuedToken, Principal, ProvisionedTenant, Result, Role, TenantRecord, TenantStatus, TokenScope, WorksheetRecord};
 
 const DEFAULT_TOKEN_TTL_SECONDS: i64 = 24 * 60 * 60;
 
@@ -281,6 +281,56 @@ impl ControlPlane {
             user_id: user.id.clone(), login: user.login.clone(), role: user.role,
             scopes: vec![TokenScope::Read],
         })
+    }
+
+    /// Password sign-in for the UI (issue #11). Password auth returns a
+    /// read-scope principal; sign-in issues that user a read-scope token
+    /// with the default expiry, so the browser holds the same revocable,
+    /// expiring credential as any API caller and nothing more. Every
+    /// failure is AuthFailed, so sign-in failures stay opaque.
+    pub async fn sign_in(&self, tenant_name: &str, login: &str, password: &str) -> Result<IssuedToken> {
+        let principal = self.authenticate_password(tenant_name, login, password).await?;
+        self.issue_token(&principal.tenant_id, &principal.user_id, vec![TokenScope::Read], None).await
+    }
+
+    /// The caller's own saved worksheets (issue #11, Q2). Any valid token
+    /// scope may read and save worksheets; execution scope is separate.
+    pub async fn list_worksheets(&self, plaintext_token: &str) -> Result<Vec<WorksheetRecord>> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        self.store.list_worksheets(&principal.tenant_id, &principal.user_id).await
+    }
+
+    /// Creates a worksheet when `id` is None, or updates one the caller
+    /// owns. Updating another user's or tenant's worksheet is NotFound.
+    pub async fn save_worksheet(
+        &self, plaintext_token: &str, id: Option<&str>, name: &str, sql_text: &str,
+    ) -> Result<WorksheetRecord> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        let name = name.trim();
+        if name.is_empty() { return Err(ControlError::InvalidInput("worksheet name is required".into())); }
+        match id {
+            Some(id) => {
+                self.store.update_worksheet(&principal.tenant_id, &principal.user_id, id, name, sql_text).await?;
+                self.store.get_worksheet(&principal.tenant_id, &principal.user_id, id).await?
+                    .ok_or(ControlError::NotFound)
+            }
+            None => {
+                let record = WorksheetRecord {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    tenant_id: principal.tenant_id.clone(), user_id: principal.user_id.clone(),
+                    name: name.to_string(), sql_text: sql_text.to_string(),
+                    created_at: String::new(), updated_at: String::new(),
+                };
+                self.store.insert_worksheet(&record).await?;
+                self.store.get_worksheet(&principal.tenant_id, &principal.user_id, &record.id).await?
+                    .ok_or_else(|| ControlError::InvalidState("worksheet missing after save".into()))
+            }
+        }
+    }
+
+    pub async fn delete_worksheet(&self, plaintext_token: &str, id: &str) -> Result<()> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        self.store.delete_worksheet(&principal.tenant_id, &principal.user_id, id).await
     }
 
     /// Auth, status, scope, namespace, and cost cap checks all happen before

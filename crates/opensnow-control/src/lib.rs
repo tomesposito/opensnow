@@ -12,4 +12,5 @@ pub use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, Metering
 pub use types::{
     ControlError, IssuedToken, Principal, ProvisionedTenant, Result, Role,
     TableColumn, TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord,
+    WorksheetRecord,
 };

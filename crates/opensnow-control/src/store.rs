@@ -3,7 +3,7 @@
 //! plain SQL, no migration framework.
 use sqlx::{PgPool, Row};
 use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, TenantCostSummary};
-use crate::types::{scopes_from_string, scopes_to_string, ControlError, Result, Role, TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord};
+use crate::types::{scopes_from_string, scopes_to_string, ControlError, Result, Role, TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord, WorksheetRecord};
 
 pub const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS tenants (
@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS query_cost_records (
     UNIQUE (tenant_id, seq)
 );
 CREATE INDEX IF NOT EXISTS query_cost_tenant_idx ON query_cost_records (tenant_id, seq);
+CREATE TABLE IF NOT EXISTS worksheets (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,
+    sql_text TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS worksheets_owner_idx ON worksheets (tenant_id, user_id);
 "#;
 
 fn tenant_from_row(row: &sqlx::postgres::PgRow) -> Result<TenantRecord> {
@@ -93,6 +103,17 @@ fn token_from_row(row: &sqlx::postgres::PgRow) -> Result<TokenRecord> {
         id: row.try_get("id")?, tenant_id: row.try_get("tenant_id")?,
         user_id: row.try_get("user_id")?, scopes, revoked: row.try_get("revoked")?,
         expires_at: row.try_get("expires_at")?,
+        created_at: row.try_get("created_at")?, updated_at: row.try_get("updated_at")?,
+    })
+}
+
+const WORKSHEET_COLS: &str = "id, tenant_id, user_id, name, sql_text, created_at::text AS created_at, updated_at::text AS updated_at";
+
+fn worksheet_from_row(row: &sqlx::postgres::PgRow) -> Result<WorksheetRecord> {
+    Ok(WorksheetRecord {
+        id: row.try_get("id")?, tenant_id: row.try_get("tenant_id")?,
+        user_id: row.try_get("user_id")?, name: row.try_get("name")?,
+        sql_text: row.try_get("sql_text")?,
         created_at: row.try_get("created_at")?, updated_at: row.try_get("updated_at")?,
     })
 }
@@ -248,6 +269,55 @@ impl ControlStore {
             total_rows_returned: u64::try_from(rows_n).map_err(|_| ControlError::InvalidState("negative cost rows".into()))?,
             total_bytes_returned: u64::try_from(bytes_n).map_err(|_| ControlError::InvalidState("negative cost bytes".into()))?,
         })
+    }
+
+    /// Worksheets owned by one user in one tenant, oldest first. The owner
+    /// filter is in the query itself, as everywhere in this crate.
+    pub async fn list_worksheets(&self, tenant_id: &str, user_id: &str) -> Result<Vec<WorksheetRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {WORKSHEET_COLS} FROM worksheets WHERE tenant_id = $1 AND user_id = $2 ORDER BY created_at, id"
+        )).bind(tenant_id).bind(user_id).fetch_all(&self.pool).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows { out.push(worksheet_from_row(row)?); }
+        Ok(out)
+    }
+
+    pub async fn get_worksheet(&self, tenant_id: &str, user_id: &str, id: &str) -> Result<Option<WorksheetRecord>> {
+        let row = sqlx::query(&format!(
+            "SELECT {WORKSHEET_COLS} FROM worksheets WHERE tenant_id = $1 AND user_id = $2 AND id = $3"
+        )).bind(tenant_id).bind(user_id).bind(id).fetch_optional(&self.pool).await?;
+        row.as_ref().map(worksheet_from_row).transpose()
+    }
+
+    pub async fn insert_worksheet(&self, w: &WorksheetRecord) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO worksheets (id, tenant_id, user_id, name, sql_text) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&w.id).bind(&w.tenant_id).bind(&w.user_id).bind(&w.name).bind(&w.sql_text)
+        .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Updates a worksheet only when the row belongs to the caller. A row
+    /// owned by someone else updates nothing, and the caller sees NotFound.
+    pub async fn update_worksheet(&self, tenant_id: &str, user_id: &str, id: &str, name: &str, sql_text: &str) -> Result<()> {
+        let done = sqlx::query(
+            "UPDATE worksheets SET name = $4, sql_text = $5, updated_at = now() WHERE tenant_id = $1 AND user_id = $2 AND id = $3",
+        )
+        .bind(tenant_id).bind(user_id).bind(id).bind(name).bind(sql_text)
+        .execute(&self.pool).await?;
+        if done.rows_affected() != 1 { return Err(ControlError::NotFound); }
+        Ok(())
+    }
+
+    pub async fn delete_worksheet(&self, tenant_id: &str, user_id: &str, id: &str) -> Result<()> {
+        let done = sqlx::query(
+            "DELETE FROM worksheets WHERE tenant_id = $1 AND user_id = $2 AND id = $3",
+        )
+        .bind(tenant_id).bind(user_id).bind(id)
+        .execute(&self.pool).await?;
+        if done.rows_affected() != 1 { return Err(ControlError::NotFound); }
+        Ok(())
     }
 }
 

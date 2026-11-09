@@ -37,6 +37,14 @@ pub struct UserRecord {
 }
 #[derive(Clone, Debug)]
 pub struct TableColumn { pub name: String, pub data_type: String }
+/// A saved worksheet, owned by one user in one tenant (issue #11, Q2:
+/// worksheets live server-side in the control-plane database).
+#[derive(Clone, Debug)]
+pub struct WorksheetRecord {
+    pub id: String, pub tenant_id: String, pub user_id: String,
+    pub name: String, pub sql_text: String,
+    pub created_at: String, pub updated_at: String,
+}
 #[derive(Clone, Debug)]
 pub struct TokenRecord {
     pub id: String, pub tenant_id: String, pub user_id: String, pub scopes: Vec<TokenScope>,

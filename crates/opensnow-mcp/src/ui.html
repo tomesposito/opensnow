@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>opensnow</title>
+<style>
+  :root{
+    --bg:#f1f5f9; --panel:#fff; --ink:#0f172a; --mut:#64748b; --mut2:#94a3b8;
+    --line:#e2e8f0; --line2:#cbd5e1; --brand:#0284c7; --brand-d:#0369a1; --brand-l:#e0f2fe;
+    --green:#15803d; --green-bg:#f0fdf4; --red:#b91c1c; --red-bg:#fef2f2; --amber:#b45309; --amber-bg:#fffbeb;
+    --radius:12px;
+    --font: ui-sans-system, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.45}
+  a{color:var(--brand)}
+  .hidden{display:none !important}
+  .btn{appearance:none;border:1px solid var(--line2);background:#fff;border-radius:7px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;color:#1e293b}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn.primary:hover{background:var(--brand-d)}
+  .btn.small{padding:4px 8px;font-size:12px}
+  .btn:disabled{opacity:.55;cursor:default}
+  .input{width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px 10px;font-size:13px;background:#fff;font-family:var(--font)}
+  label{display:block;font-size:12.5px;font-weight:600;color:#334155;margin:12px 0 4px}
+  /* Sign-in */
+  .signin-wrap{min-height:100vh;display:grid;place-items:center;padding:20px}
+  .signin-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 6px 24px rgba(15,23,42,.06);padding:28px;width:100%;max-width:380px}
+  .logo{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:-.02em;font-size:17px}
+  .logo-mark{width:26px;height:26px;border-radius:6px;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:15px}
+  .signin-card h1{font-size:19px;margin:16px 0 2px}
+  .sub{color:var(--mut);font-size:12.5px}
+  .alert{border-radius:8px;padding:10px 12px;font-size:13px;margin-top:14px}
+  .alert.red{background:var(--red-bg);color:var(--red);border:1px solid #fecaca}
+  .alert.amber{background:var(--amber-bg);color:var(--amber);border:1px solid #fde68a}
+  .alert.green{background:var(--green-bg);color:var(--green);border:1px solid #bbf7d0}
+  .signin-card .btn.primary{width:100%;margin-top:18px;padding:9px}
+  .mode-link{font-size:12.5px;margin-top:14px;text-align:center}
+  /* App shell */
+  .topbar{height:48px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:5}
+  .tenant{font-size:12px;color:var(--mut);border:1px solid var(--line);padding:4px 8px;border-radius:999px;background:#f8fafc}
+  .tenant b{color:var(--ink)}
+  .spacer{flex:1}
+  .navtabs{display:flex;gap:4px}
+  .navtab{border:none;background:none;font:inherit;font-size:13.5px;font-weight:600;color:var(--mut);padding:6px 10px;border-radius:7px;cursor:pointer}
+  .navtab.active{background:var(--brand-l);color:var(--brand-d)}
+  .shell{display:grid;grid-template-columns:230px 1fr;min-height:calc(100vh - 48px)}
+  .side{border-right:1px solid var(--line);background:#f8fafc;padding:12px;overflow:auto}
+  .side h4{margin:8px 4px 6px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut2)}
+  .search{display:flex;gap:6px;margin-bottom:10px}
+  .tree{font-size:13px}
+  .tree .trow{padding:6px 8px;border-radius:6px;color:#334155;cursor:pointer;display:flex;justify-content:space-between;gap:8px}
+  .tree .trow:hover{background:#eef2f7}
+  .tree .trow.sel{background:var(--brand-l);color:var(--brand-d);font-weight:600}
+  .wsrow{padding:6px 8px;border-radius:6px;color:#334155;cursor:pointer;font-size:13px}
+  .wsrow:hover{background:#eef2f7}
+  .wsrow.sel{background:var(--brand-l);color:var(--brand-d);font-weight:600}
+  .main{padding:18px;min-width:0;overflow:auto}
+  .main h2{margin:0 0 4px;font-size:17px}
+  .pill{display:inline-block;font-size:12px;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:4px 8px;color:#475569;margin:2px 4px 2px 0}
+  .pill b{color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff}
+  th{text-align:left;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);border-bottom:1px solid var(--line);padding:7px 8px;background:#f8fafc}
+  td{padding:7px 8px;border-bottom:1px solid #f1f5f9;color:#1e293b;vertical-align:top}
+  .gridwrap{border:1px solid var(--line);border-radius:10px;overflow:auto;background:#fff;margin-top:10px}
+  .empty{border:1.5px dashed var(--line2);border-radius:12px;background:#fff;padding:34px;text-align:center;color:var(--mut)}
+  .empty h3{color:var(--ink);margin:0 0 6px;font-size:16px}
+  .mono{font-family:var(--mono);font-size:12px}
+  textarea.sql{width:100%;min-height:130px;border:1px solid var(--line2);border-radius:8px;padding:10px;font-family:var(--mono);font-size:13px;background:#fff;color:var(--ink)}
+  .toolbar{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}
+  .costline{font-size:12.5px;color:#475569;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:10px}
+  .costline b{color:var(--ink)}
+  .panel{border-radius:10px;padding:14px;margin-top:12px;font-size:13.5px}
+  .panel.red{background:var(--red-bg);border:1px solid #fecaca;color:#7f1d1d}
+  .panel.amber{background:var(--amber-bg);border:1px solid #fde68a;color:#78350f}
+  .panel.plain{background:#fff;border:1px solid var(--line);color:var(--mut);text-align:center;padding:26px}
+</style>
+</head>
+<body>
+
+<!-- State 1 and 10: sign-in. Every failure shows the same opaque message. -->
+<div id="view-signin" class="signin-wrap">
+  <div class="signin-card">
+    <div class="logo"><span class="logo-mark">&#10052;</span> opensnow</div>
+    <h1>Sign in to your warehouse</h1>
+    <p class="sub" id="signin-sub">Password sign-in gives read and query access.</p>
+    <div id="signin-error" class="alert red hidden">Sign-in failed. Check your credentials and try again. If the problem continues, contact your workspace admin.</div>
+    <form id="form-password">
+      <label for="f-tenant">Tenant</label>
+      <input class="input" id="f-tenant" autocomplete="organization" required>
+      <label for="f-login">Login</label>
+      <input class="input" id="f-login" autocomplete="username" required>
+      <label for="f-password">Password</label>
+      <input class="input" id="f-password" type="password" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <form id="form-token" class="hidden">
+      <label for="f-token">API token</label>
+      <input class="input" id="f-token" type="password" autocomplete="off" required>
+      <p class="sub">Use a token from provisioning or the API. A write-scope token can also run write statements in worksheets.</p>
+      <button class="btn primary" type="submit">Sign in with token</button>
+    </form>
+    <p class="mode-link"><a href="#" id="mode-toggle">Sign in with an API token instead</a></p>
+  </div>
+</div>
+
+<!-- App -->
+<div id="view-app" class="hidden">
+  <div class="topbar">
+    <div class="logo"><span class="logo-mark">&#10052;</span> opensnow</div>
+    <span class="tenant">Tenant <b id="tb-tenant"></b></span>
+    <span class="tenant">Signed in as <b id="tb-login"></b></span>
+    <div class="spacer"></div>
+    <nav class="navtabs">
+      <button class="navtab active" data-view="navigate">Navigate</button>
+      <button class="navtab" data-view="worksheets">Worksheets</button>
+      <button class="navtab" data-view="history">History</button>
+    </nav>
+    <button class="btn small" id="btn-signout">Sign out</button>
+  </div>
+
+  <!-- Navigate: states 2 and 3 -->
+  <section id="section-navigate" class="shell">
+    <div class="side">
+      <h4>Catalog</h4>
+      <div class="search">
+        <input class="input" id="catalog-search" placeholder="Search catalog...">
+        <button class="btn small" id="btn-search">Search</button>
+      </div>
+      <div id="search-results" class="sub"></div>
+      <div class="tree" id="tree"></div>
+    </div>
+    <div class="main" id="navigate-main">
+      <div id="catalog-empty" class="empty hidden">
+        <h3>Your warehouse is empty</h3>
+        <p>This tenant has no tables yet. Load a file or create a table, and it will show up here with its columns and sample rows. Nothing is pre-filled.</p>
+        <p class="mono">Example: CREATE TABLE orders AS SELECT ... in a worksheet (needs a write-scope token).</p>
+      </div>
+      <div id="catalog-pick" class="empty hidden">
+        <h3>Pick a table</h3>
+        <p>Choose a table on the left to see its columns and sample rows.</p>
+      </div>
+      <div id="table-detail" class="hidden">
+        <h2 id="td-name" class="mono"></h2>
+        <p class="sub" id="td-meta"></p>
+        <h4>Columns</h4>
+        <div class="gridwrap"><table><thead><tr><th>Column</th><th>Type</th></tr></thead><tbody id="td-columns"></tbody></table></div>
+        <h4 style="margin-top:16px">Sample rows, first 5, via the authenticated read path</h4>
+        <div class="gridwrap" id="td-sample"></div>
+        <div id="td-sample-note" class="costline hidden"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Worksheets: states 4 to 8 -->
+  <section id="section-worksheets" class="shell hidden">
+    <div class="side">
+      <h4>Saved worksheets</h4>
+      <div id="ws-list"></div>
+      <button class="btn small" id="btn-ws-new" style="margin-top:8px">+ New worksheet</button>
+      <p class="sub" style="margin-top:12px">Worksheets are saved on the server, per tenant and per user.</p>
+    </div>
+    <div class="main">
+      <div class="toolbar">
+        <input class="input" id="ws-name" style="max-width:280px" value="Untitled 1">
+        <span class="sub">Table names are qualified to your namespace automatically.</span>
+      </div>
+      <textarea class="sql" id="ws-sql" spellcheck="false">SELECT * FROM orders LIMIT 100;</textarea>
+      <div class="toolbar">
+        <button class="btn primary" id="btn-run">Run</button>
+        <button class="btn" id="btn-save">Save worksheet</button>
+        <button class="btn" id="btn-delete">Delete</button>
+        <button class="btn hidden" id="btn-csv">Download CSV</button>
+        <span class="sub">Ctrl + Enter to run</span>
+      </div>
+      <div id="run-area">
+        <div class="panel plain" id="panel-noresults">No results yet. Run a query and results will appear here in a grid, with the row count and the exact cost of that query.</div>
+        <div class="panel hidden" id="panel-running" style="background:#fff;border:1px solid var(--line)">
+          <b>Running...</b>
+          <div class="costline" id="running-line"></div>
+          <p class="sub">The meter is running. This query's exact cost is calculated when it completes and its cost record is written. No in-flight dollar figure is shown, because it would be a model, not a measurement.</p>
+        </div>
+        <div class="panel red hidden" id="panel-error"></div>
+        <div class="panel amber hidden" id="panel-cap"></div>
+        <div id="results-wrap" class="hidden">
+          <div class="gridwrap" id="results-grid"></div>
+          <div class="costline" id="results-cost"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- History: state 9 -->
+  <section id="section-history" class="hidden" style="padding:18px">
+    <h2 style="margin:0 0 4px;font-size:17px">Query history</h2>
+    <p class="sub" id="history-summary"></p>
+    <div class="gridwrap">
+      <table>
+        <thead><tr><th>Time</th><th>Query</th><th>Status</th><th>Rows</th><th>Elapsed</th><th>Cost</th><th></th></tr></thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin-top:10px">History comes from your tenant's cost records. It shows only your tenant's records, the same isolation as execution.</p>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem("osn_token") || "";
+let sessionInfo = null;
+let currentWorksheetId = null;
+let lastResult = null;
+let tablesCache = [];
+
+function fmtUsd(v) {
+  // Small queries cost fractions of a cent. Show real precision for
+  // tiny amounts instead of rounding a measured cost to $0.0000.
+  v = Number(v);
+  if (v > 0 && v < 0.00005) return "$" + v.toFixed(7);
+  return "$" + v.toFixed(4);
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; }
+
+async function api(method, path, body) {
+  const headers = { "content-type": "application/json" };
+  if (token) headers["authorization"] = "Bearer " + token;
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch (e) { /* non JSON body */ }
+  if (!res.ok) {
+    const err = new Error(data.error || ("HTTP " + res.status));
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+// State 10: a 401 after sign-in ends the session with the same opaque
+// message as a failed sign-in. No data is shown.
+function sessionEnded() {
+  token = "";
+  sessionStorage.removeItem("osn_token");
+  sessionInfo = null;
+  $("view-app").classList.add("hidden");
+  $("view-signin").classList.remove("hidden");
+  $("signin-error").classList.remove("hidden");
+  $("signin-sub").textContent = "Your session has ended. Sign in again to continue.";
+}
+
+async function callApi(method, path, body) {
+  try { return await api(method, path, body); }
+  catch (e) { if (e.status === 401) { sessionEnded(); } throw e; }
+}
+
+function showApp() {
+  $("view-signin").classList.add("hidden");
+  $("view-app").classList.remove("hidden");
+  $("tb-tenant").textContent = sessionInfo ? sessionInfo.tenant_name : "";
+  $("tb-login").textContent = sessionInfo ? sessionInfo.login : "";
+  loadTables();
+  loadWorksheets();
+}
+
+async function afterSignIn(newToken) {
+  token = newToken;
+  sessionStorage.setItem("osn_token", token);
+  sessionInfo = await api("GET", "/api/session");
+  showApp();
+}
+
+$("form-password").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("signin-error").classList.add("hidden");
+  try {
+    const data = await api("POST", "/api/sign-in", {
+      tenant: $("f-tenant").value.trim(),
+      login: $("f-login").value.trim(),
+      password: $("f-password").value,
+    });
+    await afterSignIn(data.token);
+  } catch (e) {
+    // State 1: opaque failure, never say which check failed.
+    $("signin-error").classList.remove("hidden");
+  }
+});
+
+$("form-token").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("signin-error").classList.add("hidden");
+  try { await afterSignIn($("f-token").value.trim()); }
+  catch (e) { $("signin-error").classList.remove("hidden"); }
+});
+
+$("mode-toggle").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  const pw = $("form-password");
+  const tk = $("form-token");
+  const usingPw = !pw.classList.contains("hidden");
+  pw.classList.toggle("hidden", usingPw);
+  tk.classList.toggle("hidden", !usingPw);
+  $("mode-toggle").textContent = usingPw ? "Sign in with tenant, login, and password instead" : "Sign in with an API token instead";
+});
+
+$("btn-signout").addEventListener("click", () => {
+  token = "";
+  sessionStorage.removeItem("osn_token");
+  sessionInfo = null;
+  location.reload();
+});
+
+document.querySelectorAll(".navtab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".navtab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    const view = tab.dataset.view;
+    $("section-navigate").classList.toggle("hidden", view !== "navigate");
+    $("section-worksheets").classList.toggle("hidden", view !== "worksheets");
+    $("section-history").classList.toggle("hidden", view !== "history");
+    if (view === "history") loadHistory();
+  });
+});
+
+function switchView(view) {
+  document.querySelector('.navtab[data-view="' + view + '"]').click();
+}
+
+/* Navigate */
+async function loadTables() {
+  let data;
+  try { data = await callApi("GET", "/api/tables"); } catch (e) { return; }
+  tablesCache = data.tables || [];
+  const tree = $("tree");
+  tree.innerHTML = "";
+  tablesCache.forEach((name) => {
+    const row = document.createElement("div");
+    row.className = "trow";
+    row.innerHTML = "<span>&#128196; " + esc(name) + "</span>";
+    row.addEventListener("click", () => openTable(name, row));
+    tree.appendChild(row);
+  });
+  // State 2: true empty state, no staged data.
+  $("catalog-empty").classList.toggle("hidden", tablesCache.length !== 0);
+  $("catalog-pick").classList.toggle("hidden", tablesCache.length === 0);
+  $("table-detail").classList.add("hidden");
+}
+
+async function openTable(name, rowEl) {
+  document.querySelectorAll(".tree .trow").forEach((r) => r.classList.remove("sel"));
+  if (rowEl) rowEl.classList.add("sel");
+  $("catalog-empty").classList.add("hidden");
+  $("catalog-pick").classList.add("hidden");
+  $("table-detail").classList.remove("hidden");
+  $("td-name").textContent = name;
+  $("td-meta").textContent = "Table in your namespace. Columns from the catalog.";
+  try {
+    const data = await callApi("POST", "/api/describe", { table: name });
+    $("td-columns").innerHTML = (data.columns || []).map((c) =>
+      "<tr><td class='mono'>" + esc(c.name) + "</td><td class='mono'>" + esc(c.data_type) + "</td></tr>").join("");
+  } catch (e) { $("td-columns").innerHTML = "<tr><td colspan='2'>" + esc(e.message) + "</td></tr>"; }
+  // State 3 sample rows, Q4: through the existing execute path.
+  try {
+    const result = await callApi("POST", "/api/execute", { sql: "SELECT * FROM " + name + " LIMIT 5" });
+    $("td-sample").innerHTML = gridHtml(result);
+    const note = $("td-sample-note");
+    note.classList.remove("hidden");
+    note.innerHTML = "Sample query cost: <b>" + fmtUsd(result.outcome.cost_dollars) + "</b> · " +
+      Number(result.outcome.vcpu_seconds).toFixed(3) + " vCPU-sec · Record #" + result.outcome.cost_record_seq;
+  } catch (e) {
+    $("td-sample").innerHTML = "<p class='sub' style='padding:10px'>" + esc(e.message) + "</p>";
+  }
+}
+
+function gridHtml(result) {
+  const cols = result.columns || [];
+  const rows = result.rows || [];
+  let h = "<table><thead><tr>" + cols.map((c) => "<th>" + esc(c.name) + "</th>").join("") + "</tr></thead><tbody>";
+  rows.forEach((r) => {
+    h += "<tr>" + r.map((v) => "<td class='mono'>" + (v === null ? "<span class='sub'>null</span>" : esc(v)) + "</td>").join("") + "</tr>";
+  });
+  return h + "</tbody></table>";
+}
+
+async function doSearch() {
+  const q = $("catalog-search").value.trim();
+  const box = $("search-results");
+  if (!q) { box.textContent = ""; return; }
+  try {
+    const data = await callApi("POST", "/api/search", { query: q });
+    const matches = data.matches || [];
+    if (!matches.length) { box.textContent = "No matches in your catalog."; return; }
+    box.innerHTML = matches.map((m) =>
+      "Match: <b>" + esc(m.table) + "</b>" + (m.columns.length ? " (columns: " + m.columns.map(esc).join(", ") + ")" : "")).join("<br>");
+  } catch (e) { box.textContent = e.message; }
+}
+$("btn-search").addEventListener("click", doSearch);
+$("catalog-search").addEventListener("keydown", (ev) => { if (ev.key === "Enter") doSearch(); });
+
+/* Worksheets */
+async function loadWorksheets() {
+  let data;
+  try { data = await callApi("GET", "/api/worksheets"); } catch (e) { return; }
+  const list = $("ws-list");
+  list.innerHTML = "";
+  (data.worksheets || []).forEach((w) => {
+    const row = document.createElement("div");
+    row.className = "wsrow" + (w.id === currentWorksheetId ? " sel" : "");
+    row.textContent = w.name;
+    row.addEventListener("click", () => {
+      currentWorksheetId = w.id;
+      $("ws-name").value = w.name;
+      $("ws-sql").value = w.sql;
+      loadWorksheets();
+    });
+    list.appendChild(row);
+  });
+}
+
+$("btn-ws-new").addEventListener("click", () => {
+  currentWorksheetId = null;
+  $("ws-name").value = "Untitled";
+  $("ws-sql").value = "";
+  loadWorksheets();
+});
+
+$("btn-save").addEventListener("click", async () => {
+  try {
+    const saved = await callApi("POST", "/api/worksheets", {
+      id: currentWorksheetId, name: $("ws-name").value, sql: $("ws-sql").value,
+    });
+    currentWorksheetId = saved.id;
+    await loadWorksheets();
+  } catch (e) { showError(e, -1); }
+});
+
+$("btn-delete").addEventListener("click", async () => {
+  if (!currentWorksheetId) return;
+  try {
+    await callApi("POST", "/api/worksheets/delete", { id: currentWorksheetId });
+    currentWorksheetId = null;
+    $("btn-ws-new").click();
+  } catch (e) { showError(e, -1); }
+});
+
+function hideRunPanels() {
+  ["panel-noresults", "panel-running", "panel-error", "panel-cap", "results-wrap"].forEach((id) => $(id).classList.add("hidden"));
+  $("btn-csv").classList.add("hidden");
+}
+
+async function latestRecordCount() {
+  try {
+    const data = await api("GET", "/api/cost-records");
+    return (data.records || []).length;
+  } catch (e) { return -1; }
+}
+
+// States 7 and 8: after a failed run, re-read the cost records. A new
+// record means the query executed and was metered; no new record means
+// it was rejected before execution and has no cost.
+async function showError(err, recordsBefore) {
+  hideRunPanels();
+  const isCap = /cost cap/i.test(err.message);
+  let recordNote = "";
+  if (recordsBefore >= 0) {
+    try {
+      const data = await api("GET", "/api/cost-records");
+      const records = data.records || [];
+      if (records.length > recordsBefore) {
+        const r = records[records.length - 1];
+        recordNote = "Cost record #" + r.seq + " · Status " + r.status + " · " +
+          Number(r.vcpu_seconds).toFixed(3) + " vCPU-sec · Cost " + fmtUsd(r.cost_dollars) +
+          ". Failed queries are still metered.";
+      } else {
+        recordNote = "Not executed. No cost recorded.";
+      }
+    } catch (e) { recordNote = ""; }
+  }
+  if (isCap) {
+    const panel = $("panel-cap");
+    panel.classList.remove("hidden");
+    panel.innerHTML = "<b>Cost cap reached.</b> Your tenant has reached its cost cap. " +
+      "Queries are paused until an admin raises the cap. Your data and worksheets are unchanged.<br>" +
+      esc(err.message) + (recordNote ? "<br>" + esc(recordNote) : "");
+  } else {
+    const panel = $("panel-error");
+    panel.classList.remove("hidden");
+    panel.innerHTML = "<b>Query failed.</b> " + esc(err.message) +
+      (recordNote ? "<br>" + esc(recordNote) : "");
+  }
+}
+
+async function runQuery() {
+  const sql = $("ws-sql").value.trim();
+  if (!sql) return;
+  hideRunPanels();
+  $("panel-running").classList.remove("hidden");
+  $("btn-run").disabled = true;
+  const started = Date.now();
+  // State 5 (Q5): elapsed plus the tenant running totals from the cost
+  // summary. No exact dollar figure for this query while it runs.
+  let totals = "";
+  try {
+    const s = await api("GET", "/api/cost-summary");
+    totals = " · Tenant so far: " + s.record_count + " queries · Running total: " + fmtUsd(s.total_cost_dollars) +
+      " · Rate $0.0504 per vCPU-hour";
+  } catch (e) { totals = ""; }
+  const timer = setInterval(() => {
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    $("running-line").innerHTML = "Elapsed <b>" + secs + " s</b>" + esc(totals);
+  }, 100);
+  $("running-line").innerHTML = "Elapsed <b>0.0 s</b>" + esc(totals);
+  const recordsBefore = await latestRecordCount();
+  try {
+    const result = await callApi("POST", "/api/execute", { sql });
+    clearInterval(timer);
+    hideRunPanels();
+    lastResult = result;
+    $("results-wrap").classList.remove("hidden");
+    $("results-grid").innerHTML = gridHtml(result);
+    const o = result.outcome;
+    $("results-cost").innerHTML = "<b>" + result.row_count + " rows</b> · Elapsed " +
+      (Number(o.elapsed_ms) / 1000).toFixed(2) + " s · " + Number(o.bytes_returned) + " bytes · " +
+      Number(o.vcpu_seconds).toFixed(3) + " vCPU-sec · Cost <b>" + fmtUsd(o.cost_dollars) + "</b> · Record #" + o.cost_record_seq;
+    $("btn-csv").classList.remove("hidden");
+  } catch (e) {
+    clearInterval(timer);
+    if (e.status === 401) { return; } // sessionEnded already ran
+    await showError(e, recordsBefore);
+  } finally {
+    $("btn-run").disabled = false;
+  }
+}
+$("btn-run").addEventListener("click", runQuery);
+$("ws-sql").addEventListener("keydown", (ev) => { if (ev.ctrlKey && ev.key === "Enter") runQuery(); });
+
+$("btn-csv").addEventListener("click", () => {
+  if (!lastResult) return;
+  const lines = [(lastResult.columns || []).map((c) => c.name).join(",")];
+  (lastResult.rows || []).forEach((r) => lines.push(r.map((v) => v === null ? "" : '"' + String(v).replace(/"/g, '""') + '"').join(",")));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "results.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+/* History: state 9, from cost records (Q3), with re-run. */
+async function loadHistory() {
+  let data, summary;
+  try {
+    data = await callApi("GET", "/api/cost-records");
+    summary = await callApi("GET", "/api/cost-summary");
+  } catch (e) { return; }
+  $("history-summary").textContent = summary.record_count + " queries · " + fmtUsd(summary.total_cost_dollars) +
+    " total · Source: cost records";
+  const body = $("history-body");
+  body.innerHTML = "";
+  const records = (data.records || []).slice().reverse();
+  records.forEach((r) => {
+    const tr = document.createElement("tr");
+    const when = r.started_at_unix_ms ? new Date(r.started_at_unix_ms).toLocaleTimeString() : "";
+    tr.innerHTML = "<td>" + esc(when) + "</td><td class='mono'>" + esc((r.sql || "").slice(0, 60)) + "</td>" +
+      "<td>" + esc(r.status) + "</td><td>" + r.rows_returned + "</td><td>" + (Number(r.elapsed_ms) / 1000).toFixed(2) + " s</td>" +
+      "<td>" + fmtUsd(r.cost_dollars) + "</td>";
+    const td = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.className = "btn small";
+    btn.textContent = "Re-run";
+    btn.addEventListener("click", () => {
+      currentWorksheetId = null;
+      $("ws-name").value = "Untitled (from history)";
+      $("ws-sql").value = r.sql || "";
+      switchView("worksheets");
+    });
+    td.appendChild(btn);
+    tr.appendChild(td);
+    body.appendChild(tr);
+  });
+  if (!records.length) {
+    body.innerHTML = "<tr><td colspan='7' class='sub'>No queries yet. Run one from a worksheet and it will appear here with its cost.</td></tr>";
+  }
+}
+
+/* Resume a session stored in sessionStorage. */
+(async () => {
+  if (!token) return;
+  try {
+    sessionInfo = await api("GET", "/api/session");
+    showApp();
+  } catch (e) {
+    token = "";
+    sessionStorage.removeItem("osn_token");
+  }
+})();
+</script>
+</body>
+</html>

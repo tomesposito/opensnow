@@ -35,6 +35,7 @@ const DOCS: &[(&str, &str)] = &[
     ("CONTROL-PLANE.md", include_str!("../../../docs/CONTROL-PLANE.md")),
     ("METERING.md", include_str!("../../../docs/METERING.md")),
     ("MCP.md", include_str!("../../../docs/MCP.md")),
+    ("WORKSHEETS-UI.md", include_str!("../../../docs/WORKSHEETS-UI.md")),
     ("SOLUTION_DESIGN.md", include_str!("../../../SOLUTION_DESIGN.md")),
 ];
 
