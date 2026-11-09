@@ -3076,6 +3076,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "opensnow-mcp"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "iceberg",
+ "iceberg-datafusion",
+ "opensnow-control",
+ "opensnow-engine",
+ "opensnow-storage",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "opensnow-storage"
 version = "0.1.0"
 dependencies = [
@@ -4159,6 +4178,7 @@ name = "stack-check"
 version = "0.1.0"
 dependencies = [
  "opensnow-engine",
+ "opensnow-mcp",
  "opensnow-storage",
  "tokio",
 ]

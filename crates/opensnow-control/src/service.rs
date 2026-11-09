@@ -2,7 +2,7 @@
 //! shared by the in-process SQL endpoint and any future UI caller. There is
 //! no HTTP transport in this slice.
 use std::{sync::Arc, time::Duration};
-use iceberg::NamespaceIdent;
+use iceberg::{NamespaceIdent, TableIdent};
 use iceberg_datafusion::IcebergCatalogProvider;
 use opensnow_engine::{CostRecord, EngineService, QueryResult, ResourceGroup, TenantCostSummary};
 use opensnow_storage::StorageCatalog;
@@ -26,12 +26,12 @@ fn valid_ident(s: &str) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Access { Read, Write }
+pub enum Access { Read, Write }
 
 /// Qualifies every table reference to the tenant namespace and rejects any
 /// reference outside it. Fail closed: quoted identifiers, comments, CTE
 /// names, and multi-statement input are rejected or fail at execution.
-fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
+pub fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
     if sql.contains("--") || sql.contains("/*") { return Err(ControlError::AccessDenied("comments are not accepted".into())); }
     let dialect = GenericDialect {};
     let mut statements = Parser::parse_sql(&dialect, sql).map_err(|e| ControlError::InvalidInput(e.to_string()))?;
@@ -365,6 +365,19 @@ impl ControlPlane {
         Ok(names)
     }
 
+    /// Column names and types for one of the caller's tables, read from
+    /// the catalog schema in the caller's own namespace.
+    pub async fn describe_table(&self, plaintext_token: &str, table: &str) -> Result<Vec<crate::types::TableColumn>> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        if !valid_ident(table) { return Err(ControlError::InvalidInput("bad table name".into())); }
+        let ident = TableIdent::new(NamespaceIdent::new(principal.namespace.clone()), table.into());
+        let loaded = self.storage.catalog.load_table(&ident).await.map_err(|_| ControlError::NotFound)?;
+        let schema = loaded.metadata().current_schema();
+        Ok(schema.as_struct().fields().iter().map(|f| crate::types::TableColumn {
+            name: f.name.clone(), data_type: Self::iceberg_type_name(&f.field_type),
+        }).collect())
+    }
+
     pub async fn suspend_tenant(&self, tenant_id: &str) -> Result<TenantRecord> {
         let tenant = self.store.get_tenant_by_id(tenant_id).await?.ok_or(ControlError::NotFound)?;
         if tenant.status == TenantStatus::Deleted { return Err(ControlError::InvalidState("tenant is deleted".into())); }
@@ -414,5 +427,26 @@ impl ControlPlane {
         ResourceGroup { cost_cap_units, ..ResourceGroup::default() }
     }
 
-    pub fn token_ttl_default() -> Duration { Duration::from_secs(DEFAULT_TOKEN_TTL_SECONDS as u64) }
+    fn iceberg_type_name(t: &iceberg::spec::Type) -> String {
+    use iceberg::spec::{PrimitiveType, Type};
+    match t {
+        Type::Primitive(p) => match p {
+            PrimitiveType::Boolean => "BOOLEAN".into(),
+            PrimitiveType::Int => "INT".into(),
+            PrimitiveType::Long => "BIGINT".into(),
+            PrimitiveType::Float => "FLOAT".into(),
+            PrimitiveType::Double => "DOUBLE".into(),
+            PrimitiveType::String => "VARCHAR".into(),
+            PrimitiveType::Date => "DATE".into(),
+            PrimitiveType::Timestamp => "TIMESTAMP".into(),
+            PrimitiveType::Timestamptz => "TIMESTAMP WITH TIME ZONE".into(),
+            PrimitiveType::Binary => "BINARY".into(),
+            PrimitiveType::Uuid => "UUID".into(),
+            other => format!("{other}"),
+        },
+        other => format!("{other}"),
+    }
+}
+
+pub fn token_ttl_default() -> Duration { Duration::from_secs(DEFAULT_TOKEN_TTL_SECONDS as u64) }
 }

@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 opensnow-engine.workspace = true
 opensnow-storage.workspace = true
+opensnow-mcp.workspace = true
 tokio.workspace = true

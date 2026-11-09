@@ -3,8 +3,8 @@
 Slice 1.6, issue #9. The `opensnow-control` crate holds tenants, users,
 and tokens in Postgres, and it owns the one authenticated execute path.
 The in-process SQL endpoint and any future UI caller share the same auth
-check. There is no HTTP transport and no UI in this slice. Transport
-belongs to slice 1.9, issue #12.
+check. There was no HTTP transport and no UI in this slice. Transport
+shipped in slice 1.9, issue #12; see docs/MCP.md.
 
 ## Schema
 
@@ -116,7 +116,8 @@ and cost_summary read them back per tenant. See docs/METERING.md.
 
 ## Limits
 
-- No HTTP transport, no listening socket, no UI. Transport is issue #12.
+- HTTP transport and the MCP server shipped in slice 1.9, issue #12
+  (docs/MCP.md). There is still no UI in this crate; the UI is issue #11.
 - Dollar metering records live in query_cost_records and are read back
   through cost_records and cost_summary (docs/METERING.md).
   Dollar-denominated budgets are not built; the enforced cap is still

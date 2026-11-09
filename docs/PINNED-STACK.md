@@ -31,8 +31,14 @@ All versions below are exact workspace pins. Cargo.lock pins the rest.
 | hex | 0.4.3 | crates.io | MIT OR Apache-2.0 |
 | subtle | 2.6.1 | crates.io | BSD-3-Clause |
 | sqlparser | 0.62.0 | crates.io | Apache-2.0 |
+| serde | 1.0.229 | crates.io | MIT OR Apache-2.0 |
+| serde_json | 1.0.154 | crates.io | MIT OR Apache-2.0 |
 
-The three opensnow crates use Apache-2.0. SQLx explicitly enables
+The opensnow crates use Apache-2.0. Serde and serde_json were promoted
+from transitive to direct dependencies in slice 1.9, issue #12, at the
+versions the lock already held. No external package was added; the
+lock count rose by one only because opensnow-mcp is a new workspace
+crate (479 entries, of which 5 are workspace crates). SQLx explicitly enables
 runtime-tokio, sqlite, postgres, and any, with default features off. Without the
 runtime feature, the SQL catalog panics at connection time.
 
