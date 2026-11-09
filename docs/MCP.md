@@ -88,6 +88,11 @@ Routes:
   `GET /api/cost-summary`, all with a Bearer token.
 - `POST /mcp` with the JSON-RPC body. A Bearer token is required for
   every tool except provision_database.
+- The worksheets UI routes from slice 1.8, issue #11: `GET /` serves
+  the UI page, `POST /api/sign-in`, `GET /api/session`,
+  `POST /api/describe`, `POST /api/search`, and the worksheet routes
+  `GET /api/worksheets`, `POST /api/worksheets`, and
+  `POST /api/worksheets/delete`. See docs/WORKSHEETS-UI.md.
 
 Error mapping is plain: 401 for authentication failure (the control
 plane's opaque error, unchanged), 403 for access denied and cost cap,
