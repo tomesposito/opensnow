@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 use arrow::{array::Int64Array, record_batch::RecordBatch};
-use opensnow_control::{ControlError, ControlPlane, ControlStore, Role, TenantStatus, TokenScope};
+use opensnow_control::{ControlError, ControlPlane, ControlStore, CostRecordStatus, Role, TenantStatus, TokenScope};
 use opensnow_storage::CatalogConfig;
 use sqlx::ConnectOptions;
 
@@ -181,5 +181,52 @@ async fn duplicate_tenant_name_rejected_and_original_unaffected() -> TestResult 
         fx.plane.create_user(&p.tenant.id, "dev@acme.test", "dev-pass-456", Role::Member).await,
         Err(ControlError::DuplicateUser)
     ));
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metering_records_read_back_in_dollars_per_tenant() -> TestResult {
+    let Some(fx) = setup("meter").await? else { return Ok(()); };
+    let a = fx.plane.provision_tenant("acme", "admin@acme.test", "s3cret-admin-pass", None, None).await?;
+    let b = fx.plane.provision_tenant("other", "admin@other.test", "s3cret-other-pass", None, None).await?;
+    fx.plane.execute_authenticated(&a.token, "CREATE TABLE events (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&a.token, "INSERT INTO events VALUES (1), (2), (3)").await?;
+    let selected = fx.plane.execute_authenticated(&a.token, "SELECT id FROM events").await?;
+    assert_eq!(selected.outcome.rows_returned, 3);
+    assert!(selected.outcome.cost_dollars >= 0.0);
+    // A query that fails inside the engine still executed and is metered.
+    assert!(fx.plane.execute_authenticated(&a.token, "SELECT id FROM missing_table").await.is_err());
+
+    let records = fx.plane.cost_records(&a.token).await?;
+    assert_eq!(records.len(), 4);
+    assert_eq!(records.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+    assert_eq!(records[2].status, CostRecordStatus::Completed);
+    assert_eq!(records[2].rows_returned, 3);
+    assert_eq!(records[3].status, CostRecordStatus::Failed);
+    for record in &records {
+        // Dollar math from docs/METERING.md: vCPU-seconds at the default
+        // internal cost rate of $0.0504 per vCPU-hour (COST-MODEL.md).
+        let expected = record.vcpu_seconds / 3600.0 * 0.0504;
+        assert!((record.cost_dollars - expected).abs() < 1e-12, "{record:?}");
+        assert_eq!(record.tenant, a.tenant.id);
+    }
+    // Read-back is idempotent: a second read syncs nothing twice.
+    assert_eq!(fx.plane.cost_records(&a.token).await?.len(), 4);
+    // Durability: the rows are in Postgres, not only in the engine.
+    let stored = fx.plane.store().list_cost_records(&a.tenant.id).await?;
+    assert_eq!(stored.len(), 4);
+    assert_eq!(stored[2].rows_returned, 3);
+
+    let summary = fx.plane.cost_summary(&a.token).await?;
+    assert_eq!(summary.record_count, 4);
+    assert_eq!(summary.total_rows_returned, records.iter().map(|r| r.rows_returned).sum::<u64>());
+    let expected_dollars: f64 = records.iter().map(|r| r.cost_dollars).sum();
+    assert!((summary.total_cost_dollars - expected_dollars).abs() < 1e-9);
+
+    // The other tenant sees none of this, and a bad token fails opaque.
+    assert!(fx.plane.cost_records(&b.token).await?.is_empty());
+    assert_eq!(fx.plane.cost_summary(&b.token).await?.record_count, 0);
+    assert!(matches!(fx.plane.cost_records("osn_not_a_real_token").await, Err(ControlError::AuthFailed)));
+    assert!(matches!(fx.plane.cost_summary("osn_not_a_real_token").await, Err(ControlError::AuthFailed)));
     fx.teardown().await
 }

@@ -4,7 +4,7 @@
 use std::{sync::Arc, time::Duration};
 use iceberg::NamespaceIdent;
 use iceberg_datafusion::IcebergCatalogProvider;
-use opensnow_engine::{EngineService, QueryResult, ResourceGroup};
+use opensnow_engine::{CostRecord, EngineService, QueryResult, ResourceGroup, TenantCostSummary};
 use opensnow_storage::StorageCatalog;
 use sqlparser::{dialect::GenericDialect, parser::Parser};
 use tokio::sync::Mutex;
@@ -297,7 +297,60 @@ impl ControlPlane {
         };
         if !allowed { return Err(ControlError::AccessDenied("token scope does not allow this statement".into())); }
         let engine = self.engine.lock().await;
-        Ok(engine.execute(&principal.tenant_id, &rewritten).await?)
+        let result = engine.execute(&principal.tenant_id, &rewritten).await;
+        // Metering records sync to Postgres on both paths: a failed or
+        // cap-aborted query executed and left a record too. On the error
+        // path the original engine error wins over a sync failure.
+        let records = engine.cost_records(&principal.tenant_id).unwrap_or_default();
+        drop(engine);
+        match result {
+            Ok(query_result) => {
+                self.sync_cost_records(&principal.tenant_id, &records).await?;
+                Ok(query_result)
+            }
+            Err(engine_error) => {
+                let _ = self.sync_cost_records(&principal.tenant_id, &records).await;
+                Err(engine_error.into())
+            }
+        }
+    }
+
+    /// Inserts any engine cost records for this tenant that Postgres does
+    /// not hold yet. Idempotent: stored sequences are skipped, and the
+    /// table's unique constraint backs that up.
+    async fn sync_cost_records(&self, tenant_id: &str, records: &[CostRecord]) -> Result<()> {
+        let stored_max = self.store.max_cost_seq(tenant_id).await?;
+        for record in records {
+            if record.seq > stored_max {
+                self.store.insert_cost_record(tenant_id, record).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The caller's own tenant cost records, read from Postgres so they
+    /// survive an engine restart. Any valid token scope may read them.
+    pub async fn cost_records(&self, plaintext_token: &str) -> Result<Vec<CostRecord>> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        self.cost_records_for(&principal).await
+    }
+
+    async fn cost_records_for(&self, principal: &Principal) -> Result<Vec<CostRecord>> {
+        {
+            let engine = self.engine.lock().await;
+            if let Ok(records) = engine.cost_records(&principal.tenant_id) {
+                drop(engine);
+                self.sync_cost_records(&principal.tenant_id, &records).await?;
+            }
+        }
+        self.store.list_cost_records(&principal.tenant_id).await
+    }
+
+    /// The caller's own tenant cost totals, from the stored records.
+    pub async fn cost_summary(&self, plaintext_token: &str) -> Result<TenantCostSummary> {
+        let principal = self.authenticate_token(plaintext_token).await?;
+        let _ = self.cost_records_for(&principal).await?;
+        self.store.cost_summary(&principal.tenant_id).await
     }
 
     /// Table names visible to this principal. The catalog query is scoped

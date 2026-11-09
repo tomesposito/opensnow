@@ -89,13 +89,15 @@ boundaries, so they do not interrupt a long-running operator before its next
 output. Dropping the stream requests cancellation through DataFusion's stream
 lifecycle; it is not a preemptive OS kill or a rollback of SQL side effects.
 
-There is no HTTP transport, listening socket, persistent accounting, or
+There is no HTTP transport, listening socket, or
 multi-node execution in this crate. Authentication, authorization, and tenant
 persistence now exist in the opensnow-control crate (slice 1.6, issue #9; see
 docs/CONTROL-PLANE.md): its authenticated execute path checks the token,
 tenant status, and scope, and qualifies table names to the tenant's own
 namespace before calling this service. Transport still belongs to slice 1.9,
-issue #12, and dollar metering to slice 1.7, issue #10. A tenant context is a
+issue #12. Dollar metering shipped in slice 1.7, issue #10: every executed
+query leaves a per-tenant cost record here, and the control plane persists
+it to Postgres (see docs/METERING.md). A tenant context is a
 resource boundary, not a security sandbox. The API uses DataFusion types for
 engine integration at this boundary; no DataFusion internal components or
 fork are needed.

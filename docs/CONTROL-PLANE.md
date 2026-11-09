@@ -9,7 +9,7 @@ belongs to slice 1.9, issue #12.
 ## Schema
 
 Schema setup is plain SQL in the crate, applied by `ensure_schema`. It is
-idempotent and uses no migration framework. Three tables:
+idempotent and uses no migration framework. Four tables:
 
 - tenants: id (text primary key), name (unique), status (active,
   suspended, or deleted), cost_cap_units (nullable bigint), namespace
@@ -20,6 +20,10 @@ idempotent and uses no migration framework. Three tables:
 - tokens: id (text primary key), tenant_id (references tenants), user_id
   (references users), token_hash (unique), scopes (read, write, or both),
   revoked flag, expires_at, created_at, updated_at.
+- query_cost_records: tenant_id (references tenants) and seq, unique
+  together, SQL text, kind, status, rows and bytes returned, elapsed
+  milliseconds, vCPU-seconds, cost in dollars, start time. Added in
+  slice 1.7, issue #10. See docs/METERING.md.
 
 Every tenant-scoped read filters by tenant id in the query itself.
 
@@ -106,12 +110,17 @@ hits CostCapExceeded through the authenticated path. Changing the cap on
 the record re-registers an active tenant with the new value. That
 re-registration resets the engine's cumulative cost counter, which lives
 only for the registration. Dollar metering and per-query cost records
-are slice 1.7, issue #10, and are not in this slice.
+shipped in slice 1.7, issue #10: the authenticated execute path syncs
+each tenant's records to the query_cost_records table, and cost_records
+and cost_summary read them back per tenant. See docs/METERING.md.
 
 ## Limits
 
 - No HTTP transport, no listening socket, no UI. Transport is issue #12.
-- No dollar metering, no per-query cost records. That is issue #10.
+- Dollar metering records live in query_cost_records and are read back
+  through cost_records and cost_summary (docs/METERING.md).
+  Dollar-denominated budgets are not built; the enforced cap is still
+  cost_cap_units, counted in rows.
 - No erase across snapshots, clones, and shares. Delete is a tombstone
   plus token revocation, as described above.
 - The SQL guard is a guard, not a full SQL firewall. It accepts one
@@ -126,9 +135,10 @@ are slice 1.7, issue #10, and are not in this slice.
 
 ## Tests
 
-The control crate has 3 unit tests for credentials and 7 integration
+The control crate has 3 unit tests for credentials and 8 integration
 tests against throwaway Postgres databases on localhost:5433:
 provisioning under five seconds, token and password auth outcomes,
 tenant isolation, suspend and unsuspend, delete, cost cap enforcement,
-and duplicate rejection. The stored-token assertion checks that the
+duplicate rejection, and metering records read back in dollars per
+tenant. The stored-token assertion checks that the
 database holds a hash, not the returned plaintext.

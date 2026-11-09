@@ -2,6 +2,7 @@
 //! tenant id in the query itself. Schema setup is explicit and idempotent:
 //! plain SQL, no migration framework.
 use sqlx::{PgPool, Row};
+use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, TenantCostSummary};
 use crate::types::{scopes_from_string, scopes_to_string, ControlError, Result, Role, TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord};
 
 pub const SCHEMA_SQL: &str = r#"
@@ -38,6 +39,23 @@ CREATE TABLE IF NOT EXISTS tokens (
 );
 CREATE INDEX IF NOT EXISTS tokens_tenant_idx ON tokens (tenant_id);
 CREATE INDEX IF NOT EXISTS users_tenant_idx ON users (tenant_id);
+CREATE TABLE IF NOT EXISTS query_cost_records (
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    seq BIGINT NOT NULL,
+    sql_text TEXT,
+    service TEXT,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    rows_returned BIGINT NOT NULL,
+    bytes_returned BIGINT NOT NULL,
+    elapsed_ms DOUBLE PRECISION NOT NULL,
+    vcpu_seconds DOUBLE PRECISION NOT NULL,
+    cost_dollars DOUBLE PRECISION NOT NULL,
+    started_at_unix_ms BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, seq)
+);
+CREATE INDEX IF NOT EXISTS query_cost_tenant_idx ON query_cost_records (tenant_id, seq);
 "#;
 
 fn tenant_from_row(row: &sqlx::postgres::PgRow) -> Result<TenantRecord> {
@@ -169,6 +187,92 @@ impl ControlStore {
         if done.rows_affected() != 1 { return Err(ControlError::NotFound); }
         Ok(())
     }
+
+    /// Inserts one engine cost record for a tenant. The (tenant_id, seq)
+    /// unique constraint makes re-syncing idempotent: a record already
+    /// stored inserts nothing and is not an error.
+    pub async fn insert_cost_record(&self, tenant_id: &str, record: &CostRecord) -> Result<()> {
+        let seq = i64::try_from(record.seq).map_err(|_| ControlError::InvalidInput("cost record seq too large".into()))?;
+        let rows = i64::try_from(record.rows_returned).map_err(|_| ControlError::InvalidInput("cost record rows too large".into()))?;
+        let bytes = i64::try_from(record.bytes_returned).map_err(|_| ControlError::InvalidInput("cost record bytes too large".into()))?;
+        let started = i64::try_from(record.started_at_unix_ms).map_err(|_| ControlError::InvalidInput("cost record timestamp too large".into()))?;
+        sqlx::query(
+            "INSERT INTO query_cost_records (tenant_id, seq, sql_text, service, kind, status, rows_returned, bytes_returned, elapsed_ms, vcpu_seconds, cost_dollars, started_at_unix_ms) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (tenant_id, seq) DO NOTHING",
+        )
+        .bind(tenant_id).bind(seq).bind(&record.sql).bind(&record.service)
+        .bind(record.kind.as_str()).bind(record.status.as_str())
+        .bind(rows).bind(bytes).bind(record.elapsed.as_secs_f64() * 1000.0)
+        .bind(record.vcpu_seconds).bind(record.cost_dollars).bind(started)
+        .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// The highest stored sequence for a tenant, or 0 when none is stored.
+    pub async fn max_cost_seq(&self, tenant_id: &str) -> Result<u64> {
+        let row = sqlx::query("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM query_cost_records WHERE tenant_id = $1")
+            .bind(tenant_id).fetch_one(&self.pool).await?;
+        let max: i64 = row.try_get("max_seq")?;
+        u64::try_from(max).map_err(|_| ControlError::InvalidState("negative cost record seq".into()))
+    }
+
+    /// Stored cost records for one tenant, in sequence order. The tenant
+    /// filter is in the query itself, as everywhere in this crate.
+    pub async fn list_cost_records(&self, tenant_id: &str) -> Result<Vec<CostRecord>> {
+        let rows = sqlx::query(
+            "SELECT seq, sql_text, service, kind, status, rows_returned, bytes_returned, elapsed_ms, vcpu_seconds, cost_dollars, started_at_unix_ms \
+             FROM query_cost_records WHERE tenant_id = $1 ORDER BY seq",
+        ).bind(tenant_id).fetch_all(&self.pool).await?;
+        let mut records = Vec::with_capacity(rows.len());
+        for row in &rows { records.push(cost_record_from_row(tenant_id, row)?); }
+        Ok(records)
+    }
+
+    /// Totals over the stored records for one tenant, computed in SQL so
+    /// they always match the stored rows a tenant reads back.
+    pub async fn cost_summary(&self, tenant_id: &str) -> Result<TenantCostSummary> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(cost_dollars), 0) AS dollars, COALESCE(SUM(vcpu_seconds), 0) AS vcpu, \
+             COALESCE(SUM(elapsed_ms), 0) AS ms, COALESCE(SUM(rows_returned), 0)::bigint AS rows_n, COALESCE(SUM(bytes_returned), 0)::bigint AS bytes_n \
+             FROM query_cost_records WHERE tenant_id = $1",
+        ).bind(tenant_id).fetch_one(&self.pool).await?;
+        let n: i64 = row.try_get("n")?;
+        let rows_n: i64 = row.try_get("rows_n")?;
+        let bytes_n: i64 = row.try_get("bytes_n")?;
+        let ms: f64 = row.try_get("ms")?;
+        Ok(TenantCostSummary {
+            record_count: u64::try_from(n).map_err(|_| ControlError::InvalidState("negative cost count".into()))?,
+            total_cost_dollars: row.try_get("dollars")?,
+            total_vcpu_seconds: row.try_get("vcpu")?,
+            total_elapsed: std::time::Duration::from_secs_f64(ms / 1000.0),
+            total_rows_returned: u64::try_from(rows_n).map_err(|_| ControlError::InvalidState("negative cost rows".into()))?,
+            total_bytes_returned: u64::try_from(bytes_n).map_err(|_| ControlError::InvalidState("negative cost bytes".into()))?,
+        })
+    }
+}
+
+fn cost_record_from_row(tenant_id: &str, row: &sqlx::postgres::PgRow) -> Result<CostRecord> {
+    let seq: i64 = row.try_get("seq")?;
+    let rows: i64 = row.try_get("rows_returned")?;
+    let bytes: i64 = row.try_get("bytes_returned")?;
+    let started: i64 = row.try_get("started_at_unix_ms")?;
+    let kind_raw: String = row.try_get("kind")?;
+    let status_raw: String = row.try_get("status")?;
+    let elapsed_ms: f64 = row.try_get("elapsed_ms")?;
+    Ok(CostRecord {
+        tenant: tenant_id.to_string(),
+        seq: u64::try_from(seq).map_err(|_| ControlError::InvalidState("negative cost record seq".into()))?,
+        kind: CostRecordKind::parse(&kind_raw).ok_or_else(|| ControlError::InvalidState(format!("unknown cost record kind {kind_raw}")))?,
+        status: CostRecordStatus::parse(&status_raw).ok_or_else(|| ControlError::InvalidState(format!("unknown cost record status {status_raw}")))?,
+        sql: row.try_get("sql_text")?,
+        service: row.try_get("service")?,
+        started_at_unix_ms: u64::try_from(started).map_err(|_| ControlError::InvalidState("negative cost record timestamp".into()))?,
+        elapsed: std::time::Duration::from_secs_f64(elapsed_ms / 1000.0),
+        rows_returned: u64::try_from(rows).map_err(|_| ControlError::InvalidState("negative cost rows".into()))?,
+        bytes_returned: u64::try_from(bytes).map_err(|_| ControlError::InvalidState("negative cost bytes".into()))?,
+        vcpu_seconds: row.try_get("vcpu_seconds")?,
+        cost_dollars: row.try_get("cost_dollars")?,
+    })
 }
 
 /// Inputs for the single-transaction provisioning inserts.

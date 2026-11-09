@@ -2,11 +2,16 @@ use std::{
     collections::HashMap,
     fmt,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use datafusion::{arrow::record_batch::RecordBatch, error::DataFusionError, prelude::*};
 use futures::StreamExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use super::metering::{CostRecord, CostRecordKind, CostRecordStatus, MeteringRates, TenantCostSummary};
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
 
 /// Per-tenant limits. Partitions limit execution parallelism, not OS threads.
 #[derive(Clone, Debug)]
@@ -66,6 +71,8 @@ struct Tenant {
     outstanding: Arc<Semaphore>,
     running: Arc<Semaphore>,
     charged: Mutex<u64>,
+    records: Mutex<Vec<CostRecord>>,
+    rates: MeteringRates,
 }
 impl Tenant {
     fn check_cap(&self) -> Result<(), EngineError> {
@@ -74,6 +81,26 @@ impl Tenant {
             return Err(EngineError::CostCapExceeded);
         }
         Ok(())
+    }
+    /// Appends exactly one cost record and returns it. vCPU-seconds are
+    /// allocated, not measured: elapsed times the group's partitions.
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &self, tenant: &str, kind: CostRecordKind, status: CostRecordStatus,
+        sql: Option<String>, service: Option<String>, started_at_unix_ms: u64,
+        elapsed: Duration, rows_returned: u64, bytes_returned: u64,
+    ) -> CostRecord {
+        let vcpu_seconds = elapsed.as_secs_f64() * self.group.target_partitions as f64;
+        let mut records = self.records.lock().unwrap();
+        let record = CostRecord {
+            tenant: tenant.to_string(),
+            seq: records.len() as u64 + 1,
+            kind, status, sql, service, started_at_unix_ms, elapsed,
+            rows_returned, bytes_returned, vcpu_seconds,
+            cost_dollars: self.rates.cost_dollars(vcpu_seconds),
+        };
+        records.push(record.clone());
+        record
     }
 }
 /// Dropping a guard releases both admission permits, including on cancellation.
@@ -86,6 +113,11 @@ pub struct QueryOutcome {
     pub rows_returned: usize,
     pub cost_units_charged: u64,
     pub elapsed: Duration,
+    /// Sequence number of this query's cost record for the tenant.
+    pub cost_record_seq: u64,
+    pub bytes_returned: u64,
+    pub vcpu_seconds: f64,
+    pub cost_dollars: f64,
 }
 #[derive(Debug)]
 pub struct QueryResult {
@@ -96,11 +128,16 @@ pub struct QueryResult {
 #[derive(Default)]
 pub struct EngineService {
     tenants: HashMap<String, Arc<Tenant>>,
+    rates: MeteringRates,
 }
 impl EngineService {
     pub fn new() -> Self {
         Self::default()
     }
+    pub fn with_metering_rates(rates: MeteringRates) -> Self {
+        Self { tenants: HashMap::new(), rates }
+    }
+    pub fn metering_rates(&self) -> MeteringRates { self.rates }
     pub fn register_tenant(
         &mut self,
         name: impl Into<String>,
@@ -122,6 +159,8 @@ impl EngineService {
             outstanding: Arc::new(Semaphore::new(capacity)),
             running: Arc::new(Semaphore::new(group.max_concurrent)),
             charged: Mutex::new(0),
+            records: Mutex::new(Vec::new()),
+            rates: self.rates,
             group,
         }));
         Ok(())
@@ -140,6 +179,28 @@ impl EngineService {
     pub fn charged_cost(&self, name: &str) -> Result<u64, EngineError> {
         Ok(*self.tenant(name)?.charged.lock().unwrap())
     }
+    /// This tenant's cost records, in sequence order. See docs/METERING.md
+    /// for the recording rule.
+    pub fn cost_records(&self, name: &str) -> Result<Vec<CostRecord>, EngineError> {
+        Ok(self.tenant(name)?.records.lock().unwrap().clone())
+    }
+    pub fn cost_summary(&self, name: &str) -> Result<TenantCostSummary, EngineError> {
+        Ok(TenantCostSummary::from_records(&self.cost_records(name)?))
+    }
+    /// Records a non-query unit of work (compaction, maintenance, and
+    /// other background services) as its own line item, with the same
+    /// dollar math as a query. Nothing in the workspace calls this yet:
+    /// the storage crate does not depend on the engine, and automatic
+    /// background metering is a documented absence in docs/METERING.md.
+    pub fn record_background(
+        &self, name: &str, service: &str, elapsed: Duration, rows: u64, bytes: u64,
+    ) -> Result<CostRecord, EngineError> {
+        let tenant = self.tenant(name)?;
+        Ok(tenant.record(
+            name, CostRecordKind::Background, CostRecordStatus::Completed,
+            None, Some(service.to_string()), unix_now_ms(), elapsed, rows, bytes,
+        ))
+    }
     pub async fn acquire(&self, name: &str) -> Result<AdmissionGuard, EngineError> {
         let tenant = self.tenant(name)?;
         tenant.check_cap()?;
@@ -156,35 +217,73 @@ impl EngineService {
     }
     pub async fn execute(&self, name: &str, sql: &str) -> Result<QueryResult, EngineError> {
         let start = Instant::now();
+        let started_at_unix_ms = unix_now_ms();
+        // Rejections here (unknown tenant, admission denied, cap already
+        // exhausted) happen before any query executes and leave no cost
+        // record. Everything past this point leaves exactly one.
         let _guard = self.acquire(name).await?;
-        let tenant = self.tenant(name)?;
-        let mut stream = tenant.context.sql(sql).await?.execute_stream().await?;
+        let tenant = self.tenant(name)?.clone();
         let mut batches = Vec::new();
         let mut cost = 0u64;
-        let mut rows = 0;
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            let units = batch.num_rows() as u64;
-            // Charge atomically per batch so concurrent queries cannot each spend the same balance.
-            let exceeded = {
-                let mut charged = tenant.charged.lock().unwrap();
-                *charged = charged.saturating_add(units);
-                tenant.group.cost_cap_units.is_some_and(|cap| *charged > cap)
-            };
-            if exceeded {
-                return Err(EngineError::CostCapExceeded);
-            }
-            cost += units;
-            rows += batch.num_rows();
-            batches.push(batch);
-        }
-        Ok(QueryResult {
-            batches,
-            outcome: QueryOutcome {
-                rows_returned: rows,
-                cost_units_charged: cost,
-                elapsed: start.elapsed(),
+        let mut rows = 0usize;
+        let mut meter_rows = 0u64;
+        let mut meter_bytes = 0u64;
+        let mut failure: Option<EngineError> = None;
+        match tenant.context.sql(sql).await {
+            Err(e) => failure = Some(e.into()),
+            Ok(df) => match df.execute_stream().await {
+                Err(e) => failure = Some(e.into()),
+                Ok(mut stream) => {
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            Err(e) => { failure = Some(e.into()); break; }
+                            Ok(batch) => {
+                                meter_bytes += batch.get_array_memory_size() as u64;
+                                let units = batch.num_rows() as u64;
+                                meter_rows += units;
+                                // Charge atomically per batch so concurrent queries cannot each spend the same balance.
+                                let exceeded = {
+                                    let mut charged = tenant.charged.lock().unwrap();
+                                    *charged = charged.saturating_add(units);
+                                    tenant.group.cost_cap_units.is_some_and(|cap| *charged > cap)
+                                };
+                                if exceeded {
+                                    failure = Some(EngineError::CostCapExceeded);
+                                    break;
+                                }
+                                cost += units;
+                                rows += batch.num_rows();
+                                batches.push(batch);
+                            }
+                        }
+                    }
+                }
             },
-        })
+        }
+        let elapsed = start.elapsed();
+        let status = match &failure {
+            None => CostRecordStatus::Completed,
+            Some(EngineError::CostCapExceeded) => CostRecordStatus::CostCapExceeded,
+            Some(_) => CostRecordStatus::Failed,
+        };
+        let record = tenant.record(
+            name, CostRecordKind::Query, status, Some(sql.to_string()), None,
+            started_at_unix_ms, elapsed, meter_rows, meter_bytes,
+        );
+        match failure {
+            Some(e) => Err(e),
+            None => Ok(QueryResult {
+                batches,
+                outcome: QueryOutcome {
+                    rows_returned: rows,
+                    cost_units_charged: cost,
+                    elapsed,
+                    cost_record_seq: record.seq,
+                    bytes_returned: record.bytes_returned,
+                    vcpu_seconds: record.vcpu_seconds,
+                    cost_dollars: record.cost_dollars,
+                },
+            }),
+        }
     }
 }
