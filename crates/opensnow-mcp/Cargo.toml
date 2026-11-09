@@ -1,0 +1,25 @@
+[package]
+name = "opensnow-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+opensnow-engine.workspace = true
+opensnow-control.workspace = true
+opensnow-storage.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "io-util", "io-std", "net", "rt-multi-thread"] }
+arrow.workspace = true
+iceberg.workspace = true
+iceberg-datafusion.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlparser.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true
+sqlx.workspace = true

@@ -36,6 +36,8 @@ pub struct UserRecord {
     pub status: String, pub created_at: String, pub updated_at: String,
 }
 #[derive(Clone, Debug)]
+pub struct TableColumn { pub name: String, pub data_type: String }
+#[derive(Clone, Debug)]
 pub struct TokenRecord {
     pub id: String, pub tenant_id: String, pub user_id: String, pub scopes: Vec<TokenScope>,
     pub revoked: bool, pub expires_at: String, pub created_at: String, pub updated_at: String,

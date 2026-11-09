@@ -1,6 +1,7 @@
 async fn check() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     opensnow_engine::check().await?;
     opensnow_storage::check().await?;
+    opensnow_mcp::check().await?;
     Ok(())
 }
 

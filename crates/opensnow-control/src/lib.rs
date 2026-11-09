@@ -6,10 +6,10 @@ pub mod service;
 pub mod store;
 pub mod types;
 
-pub use service::{namespace_for_tenant, ControlPlane};
+pub use service::{guard_sql, namespace_for_tenant, Access, ControlPlane};
 pub use store::ControlStore;
 pub use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, MeteringRates, TenantCostSummary};
 pub use types::{
     ControlError, IssuedToken, Principal, ProvisionedTenant, Result, Role,
-    TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord,
+    TableColumn, TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord,
 };
