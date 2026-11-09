@@ -2,7 +2,7 @@
 //! shared by the in-process SQL endpoint and any future UI caller. There is
 //! no HTTP transport in this slice.
 use std::{sync::Arc, time::Duration};
-use iceberg::{Catalog, NamespaceIdent};
+use iceberg::NamespaceIdent;
 use iceberg_datafusion::IcebergCatalogProvider;
 use opensnow_engine::{EngineService, QueryResult, ResourceGroup};
 use opensnow_storage::StorageCatalog;
