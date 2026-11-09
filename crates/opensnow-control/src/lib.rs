@@ -8,6 +8,7 @@ pub mod types;
 
 pub use service::{namespace_for_tenant, ControlPlane};
 pub use store::ControlStore;
+pub use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, MeteringRates, TenantCostSummary};
 pub use types::{
     ControlError, IssuedToken, Principal, ProvisionedTenant, Result, Role,
     TenantRecord, TenantStatus, TokenRecord, TokenScope, UserRecord,

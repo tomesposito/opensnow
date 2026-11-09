@@ -1,6 +1,8 @@
 //! Tenant SQL service and analytical compatibility checks. See docs/ENGINE-SERVICE.md.
 mod service;
 pub use service::*;
+mod metering;
+pub use metering::*;
 mod yardstick;
 #[cfg(test)]
 mod tests;
