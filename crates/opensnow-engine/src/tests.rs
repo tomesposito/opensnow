@@ -105,6 +105,18 @@ async fn streamed_cost_abort_charges_processed_batches() {
 }
 
 #[tokio::test]
+async fn unregister_removes_tenant() {
+    let mut service = EngineService::new();
+    service.register_tenant("a", ResourceGroup::default()).unwrap();
+    assert!(service.is_registered("a"));
+    service.execute("a", "SELECT 1").await.unwrap();
+    service.unregister_tenant("a").unwrap();
+    assert!(!service.is_registered("a"));
+    assert!(matches!(service.execute("a", "SELECT 1").await, Err(EngineError::UnknownTenant)));
+    assert!(matches!(service.unregister_tenant("a"), Err(EngineError::UnknownTenant)));
+}
+
+#[tokio::test]
 async fn concurrent_queries_share_cumulative_cap() {
     let mut service = EngineService::new();
     service.register_tenant("a", ResourceGroup { max_concurrent: 2, cost_cap_units: Some(3), ..Default::default() }).unwrap();

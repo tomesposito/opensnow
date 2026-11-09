@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 exclude = ["vendor/iceberg-0.11.0"]
-members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/stack-check"]
+members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/opensnow-control", "crates/stack-check"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,9 +22,29 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-toki
 uuid = { version = "=1.29.0", features = ["v7"] }
 opensnow-engine = { path = "crates/opensnow-engine" }
 opensnow-storage = { path = "crates/opensnow-storage" }
+opensnow-control = { path = "crates/opensnow-control" }
+sha2 = "=0.10.9"
+hmac = "=0.12.1"
+rand = "=0.8.8"
+hex = "=0.4.3"
+subtle = "=2.6.1"
+sqlparser = { version = "=0.62.0", features = ["visitor"] }
 
 [profile.dev]
 debug = 0
+
+# Password hashing is CPU-bound by design. Unoptimized debug code makes
+# PBKDF2 roughly an order of magnitude slower than the release build the
+# provisioning time bar is written for, so the crypto path is optimized
+# in dev builds too. No other package changes profile.
+[profile.dev.package.opensnow-control]
+opt-level = 2
+
+[profile.dev.package.sha2]
+opt-level = 2
+
+[profile.dev.package.hmac]
+opt-level = 2
 
 [patch.crates-io]
 iceberg = { path = "vendor/iceberg-0.11.0" }

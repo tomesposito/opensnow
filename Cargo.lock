@@ -3046,6 +3046,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "opensnow-control"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "hex",
+ "hmac",
+ "iceberg",
+ "iceberg-datafusion",
+ "opensnow-engine",
+ "opensnow-storage",
+ "rand 0.8.8",
+ "sha2 0.10.9",
+ "sqlparser",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "opensnow-engine"
 version = "0.1.0"
 dependencies = [

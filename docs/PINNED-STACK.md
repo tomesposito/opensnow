@@ -25,6 +25,12 @@ All versions below are exact workspace pins. Cargo.lock pins the rest.
 | tempfile | 3.27.0 | crates.io | MIT OR Apache-2.0 |
 | sqlx | 0.8.6 | crates.io | MIT OR Apache-2.0 |
 | uuid | 1.29.0 | crates.io | MIT OR Apache-2.0 |
+| sha2 | 0.10.9 | crates.io | MIT OR Apache-2.0 |
+| hmac | 0.12.1 | crates.io | MIT OR Apache-2.0 |
+| rand | 0.8.8 | crates.io | MIT OR Apache-2.0 |
+| hex | 0.4.3 | crates.io | MIT OR Apache-2.0 |
+| subtle | 2.6.1 | crates.io | BSD-3-Clause |
+| sqlparser | 0.62.0 | crates.io | Apache-2.0 |
 
 The three opensnow crates use Apache-2.0. SQLx explicitly enables
 runtime-tokio, sqlite, postgres, and any, with default features off. Without the
@@ -240,3 +246,29 @@ The maintenance fixture compacted 50 files and 500 rows to one file under
 its 64 KiB target. Its five test names are recorded in
 `crates/opensnow-storage/tests/maintenance.rs`. No dependency, lockfile,
 version, or vendored source changed.
+
+## Slice 1.6 dependency update
+
+Six already locked crates became direct workspace pins at their locked
+versions, for the opensnow-control crate: sha2 0.10.9, hmac 0.12.1, and
+rand 0.8.8 (credential hashing and token generation), hex 0.4.3 and
+subtle 2.6.1 (encoding and constant time compare), and sqlparser 0.62.0
+(the execute path guard; datafusion 54.1.0 already depended on the same
+version). Licenses are in the pins table above and confirmed in cached
+manifests. No version changed and no new external package was added.
+Cargo.lock goes from 477 to 478 packages: the one addition is the
+opensnow-control crate itself.
+
+The dev profile also gains opt-level 2 overrides for opensnow-control,
+sha2, and hmac. Password hashing is CPU-bound by design, and unoptimized
+debug code made PBKDF2 slow enough to break the provisioning time bar
+under test load (6.09 seconds measured). With the overrides, the same
+test measures 0.20 seconds. No algorithm, iteration count, or version
+changed.
+
+Slice 1.6 verification (Nov 9, 2026): `cargo test --workspace --offline`
+passed 38 tests: 9 engine, 3 control unit, 7 control integration, 2
+catalog, 5 maintenance, 11 writer, and 1 combined stack. There were 0
+failures and 0 ignored tests. The control integration tests ran against
+throwaway Postgres databases on localhost:5433, and the provisioning
+test measured 0.20 seconds end to end.

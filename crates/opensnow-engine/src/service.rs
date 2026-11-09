@@ -126,6 +126,10 @@ impl EngineService {
         }));
         Ok(())
     }
+    pub fn unregister_tenant(&mut self, name: &str) -> Result<(), EngineError> {
+        self.tenants.remove(name).map(|_| ()).ok_or(EngineError::UnknownTenant)
+    }
+    pub fn is_registered(&self, name: &str) -> bool { self.tenants.contains_key(name) }
     fn tenant(&self, name: &str) -> Result<&Arc<Tenant>, EngineError> {
         self.tenants.get(name).ok_or(EngineError::UnknownTenant)
     }
