@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 exclude = ["vendor/iceberg-0.11.0"]
-members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/opensnow-control", "crates/opensnow-mcp", "crates/stack-check"]
+members = ["crates/opensnow-engine", "crates/opensnow-storage", "crates/opensnow-control", "crates/opensnow-mcp", "crates/stack-check", "crates/opensnow-gate1"]
 
 [workspace.package]
 version = "0.1.0"
