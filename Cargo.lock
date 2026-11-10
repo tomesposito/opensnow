@@ -3076,6 +3076,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "opensnow-gate1"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "datafusion",
+ "futures",
+ "iceberg",
+ "iceberg-datafusion",
+ "opensnow-engine",
+ "opensnow-storage",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "opensnow-mcp"
 version = "0.1.0"
 dependencies = [

@@ -38,7 +38,10 @@ The opensnow crates use Apache-2.0. Serde and serde_json were promoted
 from transitive to direct dependencies in slice 1.9, issue #12, at the
 versions the lock already held. No external package was added; the
 lock count rose by one only because opensnow-mcp is a new workspace
-crate (479 entries, of which 5 are workspace crates). SQLx explicitly enables
+crate (479 entries, of which 5 are workspace crates). Slice 1.10,
+issue #13, adds the opensnow-gate1 harness crate the same way: 480
+entries, 6 of them workspace crates, and its dependencies are all
+existing workspace pins plus the sibling crates. SQLx explicitly enables
 runtime-tokio, sqlite, postgres, and any, with default features off. Without the
 runtime feature, the SQL catalog panics at connection time.
 
