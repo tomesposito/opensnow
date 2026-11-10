@@ -9,6 +9,7 @@ The last section is the scorecard the Phase 1 Gate 1 run fills in.
 - **Region: us-east-1** (US East, N. Virginia). It is the reference region for AWS list prices, it is where the Snowflake prices in docs/workloads/ come from, and nothing in the wedge needs a specific region yet. A customer in another region changes both sides of the comparison by roughly the same factor.
 - **On-demand list prices on our side too.** Slice 0.1 priced Snowflake at list with no capacity contract. We do the same: no Savings Plans, no reserved instances, no spot. Those levers exist later and only help. Gate 1 is judged on the conservative version.
 - **Prices checked Nov 5, 2026.** Each price below names its source. AWS changes prices; the scorecard run should re-check this table before it fills in its numbers.
+- **Prices re-checked Nov 9, 2026** by the Gate 1 run (docs/GATE1-EVALUATION.md). No line changed: the m7i rates, the S3 rates, and the gp3 rate all confirmed against October and November 2026 sources, including the AWS price list as published in October 2026.
 - **Month: 30 days, 22 of them weekdays**, matching docs/workloads/.
 
 ## 1. AWS unit costs
@@ -124,17 +125,19 @@ The Phase 1 run fills in the measured columns on the same run mixes. Snowflake c
 
 | Workload | Snowflake cost per month | Target (a tenth) | opensnow measured cost per month | Ratio | Pass / fail |
 |---|---|---|---|---|---|
-| W1 Nightly ELT | $1,452 | $145.20 | | | |
-| W2 BI dashboards | $660 | $66.00 | | | |
-| W3 Ad-hoc analyst analysis | $1,320 | $132.00 | | | |
-| W4 Embedded customer-facing analytics | $2,940 | $294.00 | | | |
-| W5 ML feature builds | $666 | $66.60 | | | |
-| W6 Agent-driven queries | $540 | $54.00 | | | |
-| Compute subtotal | $7,578 | $757.80 | | | |
-| Storage (at cost, pass-through) | $92 | $9.20 | | | |
-| S3 requests | n/a | n/a | | | |
-| Control plane | n/a | n/a | | | |
-| **Total** | **$7,670** | **$767.00** | | | |
+| W1 Nightly ELT | $1,452 | $145.20 | $1.08 | 1340x | pass |
+| W2 BI dashboards | $660 | $66.00 | $33.12 | 19.9x | pass |
+| W3 Ad-hoc analyst analysis | $1,320 | $132.00 | $44.35 | 29.8x | pass |
+| W4 Embedded customer-facing analytics | $2,940 | $294.00 | $96.77 | 30.4x | pass |
+| W5 ML feature builds | $666 | $66.60 | $3.50 | 190x | pass |
+| W6 Agent-driven queries | $540 | $54.00 | $35.48 | 15.2x | pass |
+| Compute subtotal | $7,578 | $757.80 | $214.30 | | |
+| Storage (at cost, pass-through) | $92 | $9.20 | $1.87 | | |
+| S3 requests | n/a | n/a | $0.48 | | |
+| Control plane | n/a | n/a | $82.00 | | |
+| **Total** | **$7,670** | **$767.00** | **$298.65** | **25.7x** | **pass** |
+
+Filled by the Gate 1 run on 2026-11-09 (docs/GATE1-EVALUATION.md, which carries the method, the per-statement measurements, and the qualifications). The short version of the qualifications: W2 and W3 are costed at the runtime parity bound (the mix's active hours at our instance price, plus start minimums), because the run mix gives no execution counts for them; W5's daily refresh is carried at the model's 15 hours because its UPDATE cannot run yet; storage is the measured Parquet size (81.4 GB scaled), and the verdict also passes with storage at the 4.0 TB Snowflake figure ($388.78 total).
 
 ### Fixed inputs and modeled inputs
 

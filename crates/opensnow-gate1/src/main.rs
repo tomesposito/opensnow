@@ -51,11 +51,15 @@ fn main() {
         out += &format!("\"cold_start_seconds\": {:?},\n", report.cold_start_seconds);
         out += &format!("\"global_check\": {:?},\n\"write_check\": {:?},\n\"burst\": {:?},\n",
             report.global_check, report.write_check, report.burst);
-        out += &format!("\"total_parquet_bytes\": {},\n\"files\": {:?},\n\"statements\": [\n",
-            report.total_parquet_bytes, report.files);
+        let files_json = report.files.iter().map(|(t, c, b)| format!("{{\"table\": {t:?}, \"files\": {c}, \"bytes\": {b}}}"))
+            .collect::<Vec<_>>().join(", ");
+        out += &format!("\"total_parquet_bytes\": {},\n\"files\": [{}],\n\"statements\": [\n",
+            report.total_parquet_bytes, files_json);
         for (idx, s) in report.statements.iter().enumerate() {
-            out += &format!("{{\"id\": {:?}, \"workload\": {:?}, \"ledger\": {:?}, \"status\": {:?}, \"median_seconds\": {:?}, \"runs_seconds\": {:?}, \"rows\": {:?}, \"check\": {:?}}}{}\n",
-                s.id, s.workload, s.ledger, s.status, s.median_seconds, s.runs_seconds, s.rows, s.check,
+            let med = s.median_seconds.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
+            let rows = s.rows.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
+            out += &format!("{{\"id\": {:?}, \"workload\": {:?}, \"ledger\": {:?}, \"status\": {:?}, \"median_seconds\": {}, \"runs_seconds\": {:?}, \"rows\": {}, \"check\": {:?}}}{}\n",
+                s.id, s.workload, s.ledger, s.status, med, s.runs_seconds, rows, s.check,
                 if idx + 1 == report.statements.len() { "" } else { "," });
         }
         out += "]\n}\n";
