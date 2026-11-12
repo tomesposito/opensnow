@@ -359,3 +359,78 @@ cargo build --release -p opensnow-gate1 --offline
 target/release/opensnow-gate1 --divisor 1000    # the run in this report
 target/release/opensnow-gate1 --divisor 10000   # the scaling point
 ```
+
+## Addendum, 2026-11-12: the write gaps are closed (issue #18)
+
+The four statements that could not run now run. This addendum records
+a fresh harness run at divisor 1000 on 2026-11-12, release build, same
+conversion rules as the original run. The original verdict stands;
+nothing above is rewritten. The full run output and JSON are saved
+with the sweep's records for this issue.
+
+What changed:
+
+- MERGE runs in the storage writer: matched update, matched delete,
+  and not-matched insert, one overwrite snapshot per merge. W1.2,
+  W1.3b, and W5.4 run as merges, not as a SELECT plus a landing step.
+- UPDATE with FROM runs in the storage writer. W5.5's recency refresh
+  is measured, not carried. It was the last carried number in the
+  compute lines.
+- The v3 error rider is fixed. The copy-on-write schema check names
+  format version and partitioning as separate causes, with a test on
+  a real v3 table.
+
+Correctness in this run: all 33 statements timed, every check passed,
+the global yardstick passed, the write path check passed, and the
+burst check completed 30 of 30. The four new statements check their
+target tables against plain Rust accumulators over the generated
+rows: the merged sales_fact row for row, the daily aggregate by day
+and region, the feature table's customer set with a probe customer's
+values, and the refreshed recency for every customer with a sale in
+the last two days.
+
+Measured medians at divisor 1000, seconds:
+
+| Stmt | Seconds | Was |
+|---|---|---|
+| W1.2 merge into sales_fact | 3.286 | could not run |
+| W1.3b merge into daily_revenue_agg | 0.569 | could not run |
+| W5.4 merge into features_customer | 8.751 | could not run |
+| W5.5 update with FROM | 0.267 | could not run |
+
+Read medians in this run ran higher than on 2026-11-09 across the
+board (W1.1: 0.525 against 0.303), so the lines below use this run's
+numbers throughout and are the conservative version.
+
+Cost, with the original conversion (median times 1000, times 2 over
+priced vCPUs, start minimums on every start):
+
+- **W1, $4.79 a month** (was $1.08, target $145.20). The whole night,
+  reads, both merges, and data quality checks, is 5.223 median
+  seconds at this scale: 653 instance seconds a night on the
+  m7i.4xlarge, $4.39 of active time over 30 nights plus $0.40 of
+  start minimums. The merge write side is in this number now. The
+  original report said W1 would land near $2 even if the write side
+  cost as much as the read side again; with this run's slower reads
+  it lands at $4.79, still 303x under Snowflake's $1,452.
+- **W5, $1.92 a month** (was $3.50, target $66.60). A big build,
+  source selects and the W5.4 merge included, is 13.775 median
+  seconds at this scale: 1,722 instance seconds on the m7i.4xlarge,
+  $1.54 for four builds plus $0.05 of start minimums. The daily
+  refresh is measured at last: 0.267 median seconds, 133.5 instance
+  seconds on the m7i.xlarge, $0.22 of active time over 30 refreshes
+  plus $0.10 of start minimums, $0.33 in all. It replaces the carried
+  15 hours at $3.02.
+- **Total, $300.78 a month** (was $298.65, line $767). Only the W1
+  and W5 lines move; storage, requests, and the control plane stay
+  as the original run measured them. The total is 25.5x under
+  Snowflake's $7,670, and at 70 percent gross margin it carries at
+  about $12,000 a year, inside the $10k to $30k band. Gate 1 still
+  passes, now with no carried compute number and no statement that
+  cannot run.
+
+One honest limit: a joined mutation in this slice rewrites the whole
+target table in its one snapshot, where plain DELETE and UPDATE keep
+untouched files. That is why the W5.4 merge, over a 2,000 row table
+at this scale, is the slowest statement in the run. Per-file reuse
+for merges is an optimization for later, recorded in docs/STORAGE.md.
