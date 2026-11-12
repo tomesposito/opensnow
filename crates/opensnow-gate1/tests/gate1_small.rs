@@ -1,7 +1,7 @@
 //! Small-scale Gate 1 harness test: divisor 200,000 gives 10,000
 //! sales_fact rows and 30,000 clickstream rows. Asserts the yardstick
-//! checks pass, no runnable statement fails, and the could-not-run
-//! ledger entries are exactly the MERGE and UPDATE-FROM statements.
+//! checks pass, no runnable statement fails, and every statement runs
+//! (the MERGE and UPDATE-FROM statements included, since issue #18).
 use opensnow_gate1::run;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -21,6 +21,6 @@ async fn gate1_harness_small_scale() {
             if s.check != "none" { assert_eq!(s.check, "pass", "{} check", s.id); }
         }
     }
-    assert_eq!(could_not, ["W1.2", "W1.3b", "W5.4", "W5.5"]);
+    assert!(could_not.is_empty(), "statements that could not run: {could_not:?}");
     assert_eq!(report.statements.len(), 33);
 }

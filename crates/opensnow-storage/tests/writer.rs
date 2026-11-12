@@ -196,7 +196,6 @@ async fn rejected_sql_and_invalid_values_do_not_commit() -> Result<()> {
         "DELETE FROM ice.db.events JOIN ice.db.events AS other ON true",
         "DELETE FROM (SELECT * FROM ice.db.events)",
         "DELETE FROM ice.db.events WHERE id IN (SELECT id FROM ice.db.events)",
-        "UPDATE ice.db.events SET value = 1 FROM ice.db.events AS other",
         "UPDATE ice.db.events SET value = 1 RETURNING *",
         "UPDATE ice.db.events SET value = 1, value = 2",
         "UPDATE ice.db.events SET missing = 1 WHERE id = 99",
@@ -207,7 +206,10 @@ async fn rejected_sql_and_invalid_values_do_not_commit() -> Result<()> {
         "UPDATE ice.db.events SET value = 'invalid' WHERE id = 1",
         "DELETE FROM ice.db.events WHERE 1",
         "DELETE FROM ice.db.events; DELETE FROM ice.db.events",
-        "MERGE INTO ice.db.events USING ice.db.events AS other ON false WHEN MATCHED THEN DELETE",
+        "MERGE INTO ice.db.events USING ice.db.events AS other ON false WHEN MATCHED THEN UPDATE SET value = SUM(id)",
+        "MERGE INTO other.db.events USING ice.db.events AS other ON false WHEN MATCHED THEN DELETE",
+        "MERGE INTO ice.db.events USING ice.db.events AS other ON false WHEN NOT MATCHED BY SOURCE THEN DELETE",
+        "UPDATE ice.db.events AS e SET value = 1 FROM ice.db.events AS a, ice.db.events AS b WHERE e.id = a.id",
     ] {
         assert!(f.storage.execute(sql).await.is_err(), "unexpectedly accepted: {sql}");
         assert_eq!(f.history().await?, before, "committed: {sql}");
@@ -307,4 +309,167 @@ async fn update_casts_assignments_without_coercing_unmatched_values() -> Result<
     f.storage.execute("/* precision */ UPDATE ICE.DB.EVENTS SET \"value\" = 1.5 WHERE id = 1;").await?;
     assert_eq!(f.live().await?, vec![(1, Some(1)), (2, Some(9007199254740993))]);
     f.assert_snapshot(before, &original, 4).await
+}
+
+async fn incoming(f: &Fixture) -> Result<()> {
+    f.storage.execute("CREATE TABLE ice.db.incoming (id BIGINT NOT NULL, value BIGINT)").await?;
+    f.storage.execute("INSERT INTO ice.db.incoming VALUES (2, 200), (3, 300), (6, 60)").await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_updates_matched_and_inserts_unmatched_in_one_snapshot() -> Result<()> {
+    let f = Fixture::new().await?;
+    incoming(&f).await?;
+    let original = f.live().await?;
+    let before = f.storage.current_snapshot_id(&f.ident).await?;
+    f.storage.execute(
+        "MERGE INTO ice.db.events AS e USING ice.db.incoming AS i ON e.id = i.id \
+         WHEN MATCHED THEN UPDATE SET e.value = i.value \
+         WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)",
+    ).await?;
+    assert_eq!(f.live().await?, vec![
+        (1, Some(10)), (2, Some(200)), (3, Some(300)), (4, Some(40)), (5, Some(50)), (6, Some(60)),
+    ]);
+    f.assert_snapshot(before, &original, 3).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_matched_delete_with_clause_predicates_in_order() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.storage.execute("CREATE TABLE ice.db.incoming (id BIGINT NOT NULL, value BIGINT)").await?;
+    f.storage.execute("INSERT INTO ice.db.incoming VALUES (2, 200), (4, 400), (5, 500)").await?;
+    f.storage.execute(
+        "MERGE INTO ice.db.events AS e USING ice.db.incoming AS i ON e.id = i.id \
+         WHEN MATCHED AND e.value >= 40 THEN DELETE \
+         WHEN MATCHED THEN UPDATE SET e.value = i.value",
+    ).await?;
+    assert_eq!(f.live().await?, vec![(1, Some(10)), (2, Some(200)), (3, None)]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_with_subquery_source_and_noop_merge_without_snapshot() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.storage.execute(
+        "MERGE INTO ice.db.events AS e \
+         USING (SELECT id, value * 10 AS value FROM ice.db.events WHERE id <= 2) AS s ON e.id = s.id \
+         WHEN MATCHED THEN UPDATE SET e.value = s.value",
+    ).await?;
+    assert_eq!(f.live().await?, vec![(1, Some(100)), (2, Some(200)), (3, None), (4, Some(40)), (5, Some(50))]);
+    let history = f.history().await?;
+    let live = f.live().await?;
+    // No row matches and there is no insert clause: no snapshot.
+    f.storage.execute(
+        "MERGE INTO ice.db.events AS e USING ice.db.events AS other ON false WHEN MATCHED THEN DELETE",
+    ).await?;
+    assert_eq!(f.history().await?, history);
+    assert_eq!(f.live().await?, live);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_duplicate_source_match_is_rejected_without_a_snapshot() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.storage.execute("CREATE TABLE ice.db.incoming (id BIGINT NOT NULL, value BIGINT)").await?;
+    f.storage.execute("INSERT INTO ice.db.incoming VALUES (2, 200), (2, 201)").await?;
+    let history = f.history().await?;
+    let original = f.live().await?;
+    let error = f.storage.execute(
+        "MERGE INTO ice.db.events AS e USING ice.db.incoming AS i ON e.id = i.id \
+         WHEN MATCHED THEN UPDATE SET e.value = i.value",
+    ).await.unwrap_err();
+    assert!(error.to_string().contains("more than once"), "{error}");
+    assert_eq!(f.history().await?, history);
+    assert_eq!(f.live().await?, original);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_with_from_joins_a_derived_source_in_one_snapshot() -> Result<()> {
+    let f = Fixture::new().await?;
+    let original = f.live().await?;
+    let before = f.storage.current_snapshot_id(&f.ident).await?;
+    f.storage.execute(
+        "UPDATE ice.db.events AS e SET value = last_value.total \
+         FROM (SELECT id, value + 100 AS total FROM ice.db.events WHERE id >= 4) AS last_value \
+         WHERE e.id = last_value.id",
+    ).await?;
+    assert_eq!(f.live().await?, vec![(1, Some(10)), (2, Some(20)), (3, None), (4, Some(140)), (5, Some(150))]);
+    f.assert_snapshot(before, &original, 3).await?;
+    // A FROM update that matches nothing creates no snapshot.
+    let history = f.history().await?;
+    f.storage.execute(
+        "UPDATE ice.db.events AS e SET value = 0 \
+         FROM (SELECT id FROM ice.db.events WHERE id > 100) AS big WHERE e.id = big.id",
+    ).await?;
+    assert_eq!(f.history().await?, history);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_with_from_a_table_source_and_duplicate_rejection() -> Result<()> {
+    let f = Fixture::new().await?;
+    incoming(&f).await?;
+    f.storage.execute(
+        "UPDATE ice.db.events AS e SET value = i.value FROM ice.db.incoming AS i WHERE e.id = i.id",
+    ).await?;
+    assert_eq!(f.live().await?, vec![(1, Some(10)), (2, Some(200)), (3, Some(300)), (4, Some(40)), (5, Some(50))]);
+    f.storage.execute("INSERT INTO ice.db.incoming VALUES (2, 201)").await?;
+    let history = f.history().await?;
+    assert!(f.storage.execute(
+        "UPDATE ice.db.events AS e SET value = i.value FROM ice.db.incoming AS i WHERE e.id = i.id",
+    ).await.is_err());
+    assert_eq!(f.history().await?, history);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v3_table_error_names_format_version_not_partitioning() -> Result<()> {
+    let f = Fixture::new().await?;
+    // A bare TIMESTAMP is a nanosecond timestamp; the provider creates a
+    // format v3 table for it (Gate 1 findings, docs/GATE1-EVALUATION.md).
+    f.storage.execute("CREATE TABLE ice.db.versioned (id BIGINT NOT NULL, ts TIMESTAMP)").await?;
+    let ident = TableIdent::from_strs(["db", "versioned"])?;
+    let table = f.storage.catalog.load_table(&ident).await?;
+    assert_eq!(table.metadata().format_version(), iceberg::spec::FormatVersion::V3);
+    let error = f.storage.execute("DELETE FROM ice.db.versioned WHERE id = 1").await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("format version v3"), "{message}");
+    assert!(!message.contains("partition"), "{message}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_handles_date_varchar_and_double_columns() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = CatalogConfig::sqlite("typed", temp.path().join("catalog.db"), temp.path().join("warehouse"))?.connect().await?;
+    storage.create_namespace(&iceberg::NamespaceIdent::new("db".into())).await?;
+    storage.execute("CREATE TABLE ice.db.fact (id BIGINT NOT NULL, d DATE NOT NULL, name VARCHAR NOT NULL, amount DOUBLE NOT NULL)").await?;
+    storage.execute("INSERT INTO ice.db.fact VALUES (1, DATE '2026-01-01', 'East', 1.5), (2, DATE '2026-01-02', 'West', 2.5)").await?;
+    storage.execute("CREATE TABLE ice.db.src (id BIGINT NOT NULL, d DATE NOT NULL, name VARCHAR NOT NULL, amount DOUBLE NOT NULL)").await?;
+    storage.execute("INSERT INTO ice.db.src VALUES (2, DATE '2026-02-02', 'North', 9.5), (3, DATE '2026-02-03', 'South', 3.5)").await?;
+    storage.execute(
+        "MERGE INTO ice.db.fact AS f USING ice.db.src AS s ON f.id = s.id \
+         WHEN MATCHED THEN UPDATE SET f.d = s.d, f.name = s.name, f.amount = s.amount \
+         WHEN NOT MATCHED THEN INSERT (id, d, name, amount) VALUES (s.id, s.d, s.name, s.amount)",
+    ).await?;
+    let batches = storage.sql("SELECT id, name, amount FROM ice.db.fact").await?;
+    let mut got: Vec<(i64, String, f64)> = batches.iter().flat_map(|batch| {
+        let ids = batch.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let names = batch.column(1).as_any().downcast_ref::<arrow::array::StringViewArray>().map(|a| (0..batch.num_rows()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+            .unwrap_or_else(|| {
+                let a = batch.column(1).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                (0..batch.num_rows()).map(|i| a.value(i).to_string()).collect::<Vec<_>>()
+            });
+        let amounts = batch.column(2).as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+        (0..batch.num_rows()).map(|i| (ids.value(i), names[i].clone(), amounts.value(i))).collect::<Vec<_>>()
+    }).collect();
+    got.sort_by_key(|row| row.0);
+    assert_eq!(got, vec![
+        (1, "East".to_string(), 1.5),
+        (2, "North".to_string(), 9.5),
+        (3, "South".to_string(), 3.5),
+    ]);
+    Ok(())
 }

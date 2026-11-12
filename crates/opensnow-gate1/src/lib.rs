@@ -424,6 +424,10 @@ pub enum Check {
     GlobalTotals,
     DedupedCount,
     DailyAggRows,
+    MergeSales,
+    MergeAgg,
+    MergeFeatures,
+    UpdateFromRecency,
     Zero,
     W21Full,
     W21West,
@@ -456,13 +460,15 @@ pub fn statements(probe_customer: i64) -> Vec<Stmt> {
         // W1 Nightly ELT
         s("W1.1", "W1", Ledger::Rewrite("CREATE OR REPLACE TEMP TABLE wrapper dropped; the dedupe SELECT body runs as written (QUALIFY is SF01, runs as written)"),
           Some(DEDUPED.into()), Check::DedupedCount, &["orders_raw"]),
-        s("W1.2", "W1", Ledger::CouldNotRun("MERGE: the prototype has no MERGE. The storage writer supports single-table DELETE and UPDATE only (crates/opensnow-storage/src/writer.rs). The merge read side is timed in W1.1 and W1.3; the write side is exercised separately in the write path check."),
-          None, Check::None, &[]),
+        s("W1.2", "W1", Ledger::Rewrite("MERGE runs through the storage writer (issue #18); the orders_deduped temp table is inlined as the merge source, as in W1.4b"),
+          Some(format!("MERGE INTO ice.db.sales_fact AS f USING ({DEDUPED}) AS o ON f.order_id = o.order_id WHEN MATCHED THEN UPDATE SET f.order_date = o.order_date, f.customer_id = o.customer_id, f.product_id = o.product_id, f.region = o.region, f.quantity = o.quantity, f.unit_price = o.unit_price, f.discount = o.discount WHEN NOT MATCHED THEN INSERT (order_id, order_date, customer_id, product_id, region, quantity, unit_price, discount) VALUES (o.order_id, o.order_date, o.customer_id, o.product_id, o.region, o.quantity, o.unit_price, o.discount)")),
+          Check::MergeSales, &["sales_fact", "orders_raw"]),
         s("W1.3", "W1", Ledger::Rewrite("DATEADD rewritten as date minus INTERVAL (docs/COMPATIBILITY.md SF04); TEMP TABLE wrapper dropped, the rebuild SELECT runs"),
           Some("WITH daily AS (SELECT order_date, region, SUM(quantity * unit_price * (1 - discount)) AS net_revenue, COUNT(*) AS order_count FROM ice.db.sales_fact WHERE order_date >= DATE '2026-11-09' - INTERVAL '35' DAY GROUP BY order_date, region), monthly AS (SELECT date_trunc('month', order_date) AS month, region, AVG(net_revenue) AS avg_daily_revenue FROM daily GROUP BY month, region) SELECT d.order_date, d.region, d.net_revenue, d.order_count, m.avg_daily_revenue FROM daily AS d JOIN monthly AS m ON m.month = date_trunc('month', d.order_date) AND m.region = d.region".into()),
           Check::DailyAggRows, &["sales_fact"]),
-        s("W1.3b", "W1", Ledger::CouldNotRun("MERGE into daily_revenue_agg: no MERGE in the prototype, same as W1.2. The aggregate rows are landed with replace_all in the write path check."),
-          None, Check::None, &[]),
+        s("W1.3b", "W1", Ledger::Rewrite("MERGE runs through the storage writer (issue #18); the daily_revenue_new temp table is the W1.3 SELECT inlined as the merge source"),
+          Some("MERGE INTO ice.db.daily_revenue_agg AS a USING (WITH daily AS (SELECT order_date, region, SUM(quantity * unit_price * (1 - discount)) AS net_revenue, COUNT(*) AS order_count FROM ice.db.sales_fact WHERE order_date >= DATE '2026-11-09' - INTERVAL '35' DAY GROUP BY order_date, region), monthly AS (SELECT date_trunc('month', order_date) AS month, region, AVG(net_revenue) AS avg_daily_revenue FROM daily GROUP BY month, region) SELECT d.order_date, d.region, d.net_revenue, d.order_count, m.avg_daily_revenue FROM daily AS d JOIN monthly AS m ON m.month = date_trunc('month', d.order_date) AND m.region = d.region) AS n ON a.order_date = n.order_date AND a.region = n.region WHEN MATCHED THEN UPDATE SET a.net_revenue = n.net_revenue, a.order_count = n.order_count, a.avg_daily_revenue = n.avg_daily_revenue WHEN NOT MATCHED THEN INSERT (order_date, region, net_revenue, order_count, avg_daily_revenue) VALUES (n.order_date, n.region, n.net_revenue, n.order_count, n.avg_daily_revenue)".into()),
+          Check::MergeAgg, &["daily_revenue_agg", "sales_fact"]),
         s("W1.4a", "W1", Ledger::AsWritten,
           Some("SELECT COUNT(*) AS null_order_ids FROM ice.db.sales_fact WHERE order_id IS NULL AND order_date >= DATE '2026-11-08'".into()), Check::Zero, &["sales_fact"]),
         s("W1.4b", "W1", Ledger::Rewrite("orders_deduped temp table replaced by the inline dedupe subquery"),
@@ -521,10 +527,12 @@ pub fn statements(probe_customer: i64) -> Vec<Stmt> {
         s("W5.4s", "W5", Ledger::Rewrite("The MERGE source SELECT, run on its own: features_ranked LEFT JOIN features_trend, both inlined"),
           Some(format!("SELECT r.customer_id, r.recency_days, r.orders_12m, r.spend_12m, r.avg_order_value, r.spend_percentile_in_segment, r.spend_decile, t.events_this_month, t.activity_ratio FROM ({FEATURES_RANKED}) AS r LEFT JOIN ({FEATURES_TREND}) AS t ON t.customer_id = r.customer_id")),
           Check::DistinctCustomers, &["sales_fact", "dim_customer", "clickstream_events"]),
-        s("W5.4", "W5", Ledger::CouldNotRun("MERGE into features_customer: no MERGE in the prototype, same as W1.2. Its source SELECT is timed as W5.4s and its rows are landed with replace_all in the write path check."),
-          None, Check::None, &[]),
-        s("W5.5", "W5", Ledger::CouldNotRun("UPDATE with a FROM clause over a derived table: the storage writer's UPDATE takes scalar assignments over the target table's own columns only (crates/opensnow-storage/src/writer.rs), so a join-driven recency refresh cannot run. The refresh's monthly hours stay unmeasured."),
-          None, Check::None, &[]),
+        s("W5.4", "W5", Ledger::Rewrite("MERGE runs through the storage writer (issue #18); its source is the W5.4s SELECT inlined"),
+          Some(format!("MERGE INTO ice.db.features_customer AS f USING (SELECT r.customer_id, r.recency_days, r.orders_12m, r.spend_12m, r.avg_order_value, r.spend_percentile_in_segment, r.spend_decile, t.events_this_month, t.activity_ratio FROM ({FEATURES_RANKED}) AS r LEFT JOIN ({FEATURES_TREND}) AS t ON t.customer_id = r.customer_id) AS s ON f.customer_id = s.customer_id WHEN MATCHED THEN UPDATE SET f.recency_days = s.recency_days, f.orders_12m = s.orders_12m, f.spend_12m = s.spend_12m, f.avg_order_value = s.avg_order_value, f.spend_percentile_in_segment = s.spend_percentile_in_segment, f.spend_decile = s.spend_decile, f.events_this_month = s.events_this_month, f.activity_ratio = s.activity_ratio WHEN NOT MATCHED THEN INSERT (customer_id, recency_days, orders_12m, spend_12m, avg_order_value, spend_percentile_in_segment, spend_decile, events_this_month, activity_ratio) VALUES (s.customer_id, s.recency_days, s.orders_12m, s.spend_12m, s.avg_order_value, s.spend_percentile_in_segment, s.spend_decile, s.events_this_month, s.activity_ratio)")),
+          Check::MergeFeatures, &["features_customer", "sales_fact", "dim_customer", "clickstream_events"]),
+        s("W5.5", "W5", Ledger::Rewrite("UPDATE with FROM runs through the storage writer (issue #18); DATEDIFF(day) as the epoch form (SF05), DATEADD as date minus INTERVAL (SF04), CURRENT_DATE anchored"),
+          Some("UPDATE ice.db.features_customer AS f SET recency_days = CAST((EXTRACT(EPOCH FROM DATE '2026-11-09') - EXTRACT(EPOCH FROM last_order.last_date)) / 86400 AS BIGINT) FROM (SELECT customer_id, MAX(order_date) AS last_date FROM ice.db.sales_fact WHERE order_date >= DATE '2026-11-09' - INTERVAL '2' DAY GROUP BY customer_id) AS last_order WHERE f.customer_id = last_order.customer_id".into()),
+          Check::UpdateFromRecency, &["features_customer", "sales_fact"]),
         // W6 Agent-driven queries
         s("W6.1", "W6", Ledger::Rewrite("INFORMATION_SCHEMA.TABLES cannot run: the engine session does not enable information_schema (crates/opensnow-engine session config). The equivalent metadata operation runs against the Iceberg catalog API: list tables, then a row count per table from its current snapshot, timed as one operation"),
           None, Check::None, &[]),
@@ -663,6 +671,9 @@ pub fn run_check(check: Check, batches: &[RecordBatch], exp: &Expected) -> Resul
                 return Err(format!("rows {n} != distinct customers {}", exp.distinct_customers_sales.len()));
             }
             Ok(())
+        }
+        Check::MergeSales | Check::MergeAgg | Check::MergeFeatures | Check::UpdateFromRecency => {
+            Err("mutation checks read the target table, not result batches".into())
         }
     }
 }
@@ -872,6 +883,53 @@ pub async fn run(divisor: i64) -> Result<(Report, Harness, Dataset), BoxError> {
             report.statements.push(sr);
             continue;
         }
+        if matches!(stmt.id, "W1.2" | "W1.3b" | "W5.4" | "W5.5") {
+            // Mutations run through the storage writer, not the engine
+            // session, and are timed the same way: one warm-up, three runs.
+            let sql = stmt.sql.as_ref().expect("mutation statement has sql");
+            let mut runs = Vec::new();
+            let mut failure = None;
+            for i in 0..4 {
+                let start = Instant::now();
+                match storage.execute(sql).await {
+                    Ok(_) => {
+                        if i > 0 {
+                            runs.push(start.elapsed().as_secs_f64());
+                        }
+                    }
+                    Err(e) => {
+                        failure = Some(format!("{e}"));
+                        break;
+                    }
+                }
+            }
+            if let Some(e) = failure {
+                sr.status = "failed".to_string();
+                sr.check = format!("fail: execute: {e}");
+                report.statements.push(sr);
+                continue;
+            }
+            sr.median_seconds = Some(median(runs.clone()));
+            sr.runs_seconds = runs;
+            sr.rows = Some(0);
+            sr.check = match mutation_check(stmt.id, &storage, &data).await {
+                Ok(()) => "pass".to_string(),
+                Err(e) => format!("fail: {e}"),
+            };
+            if stmt.id == "W1.2" {
+                // The generated orders_raw and sales_fact sets are
+                // independent fixtures, and the read workloads' yardsticks
+                // describe the original fact table. The merge has run and
+                // been checked; restore the fixture before W1.3 reads it.
+                if let Err(e) = storage.replace_all(
+                    &TableIdent::new(ns.clone(), "sales_fact".into()), data.sales.clone(),
+                ).await {
+                    sr.check = format!("fail: restore sales_fact after W1.2: {e}");
+                }
+            }
+            report.statements.push(sr);
+            continue;
+        }
         let sql = stmt.sql.as_ref().expect("runnable statement has sql");
         // Warm-up, untimed.
         if let Err(e) = service.execute("gate1", sql).await {
@@ -939,6 +997,217 @@ pub async fn run(divisor: i64) -> Result<(Report, Harness, Dataset), BoxError> {
 
     let harness = Harness { storage, service, dir };
     Ok((report, harness, data))
+}
+
+// --- Mutation checks (issue #18) ---
+//
+// Expected post-mutation rows are built from the generated batches with
+// plain Rust loops, the same yardstick style as run_check: nothing here
+// reads a result the SQL under test produced.
+
+type SalesRow = (i64, i32, i64, i64, String, i64, f64, f64);
+
+fn sales_rows(batches: &[RecordBatch]) -> Vec<SalesRow> {
+    use arrow::array::{Array, Date32Array, Float64Array, Int64Array, StringArray};
+    let mut out = Vec::new();
+    for batch in batches {
+        let ids = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let dates = batch.column(1).as_any().downcast_ref::<Date32Array>().unwrap();
+        let custs = batch.column(2).as_any().downcast_ref::<Int64Array>().unwrap();
+        let prods = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
+        let regs = batch.column(4).as_any().downcast_ref::<StringArray>().unwrap();
+        let qtys = batch.column(5).as_any().downcast_ref::<Int64Array>().unwrap();
+        let prices = batch.column(6).as_any().downcast_ref::<Float64Array>().unwrap();
+        let discs = batch.column(7).as_any().downcast_ref::<Float64Array>().unwrap();
+        for i in 0..batch.num_rows() {
+            out.push((
+                ids.value(i), dates.value(i), custs.value(i), prods.value(i),
+                regs.value(i).to_string(), qtys.value(i), prices.value(i), discs.value(i),
+            ));
+        }
+        let _ = batch;
+    }
+    out
+}
+
+fn feature_rows(batches: &[RecordBatch]) -> Vec<(i64, Option<i64>, Option<i64>, Option<f64>, Option<f64>)> {
+    use arrow::array::{Array, Float64Array, Int64Array};
+    let mut out = Vec::new();
+    for batch in batches {
+        let custs = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let recency = batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        let orders = batch.column(2).as_any().downcast_ref::<Int64Array>().unwrap();
+        let spend = batch.column(3).as_any().downcast_ref::<Float64Array>().unwrap();
+        let avg = batch.column(4).as_any().downcast_ref::<Float64Array>().unwrap();
+        for i in 0..batch.num_rows() {
+            out.push((
+                custs.value(i),
+                (!recency.is_null(i)).then(|| recency.value(i)),
+                (!orders.is_null(i)).then(|| orders.value(i)),
+                (!spend.is_null(i)).then(|| spend.value(i)),
+                (!avg.is_null(i)).then(|| avg.value(i)),
+            ));
+        }
+    }
+    out
+}
+
+async fn mutation_check(id: &str, storage: &StorageCatalog, data: &Dataset) -> Result<(), String> {
+    let anchor = anchor_day();
+    match id {
+        "W1.2" => {
+            let mut merged: HashMap<i64, SalesRow> = HashMap::new();
+            for row in sales_rows(&data.sales) {
+                merged.insert(row.0, row);
+            }
+            // Dedupe orders_raw loaded in the last day, latest load wins.
+            let cutoff = (anchor * 86_400 + 43_200 - 86_400) * 1_000_000;
+            let mut latest: HashMap<i64, (i64, SalesRow)> = HashMap::new();
+            for batch in &data.orders_raw {
+                let rows = sales_rows(&[RecordBatch::try_new(
+                    sales_schema(),
+                    batch.columns()[..8].to_vec(),
+                ).unwrap()]);
+                use arrow::array::{Array, TimestampMicrosecondArray};
+                let loads = batch.column(8).as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                for (i, row) in rows.into_iter().enumerate() {
+                    let loaded = loads.value(i);
+                    if loaded >= cutoff {
+                        let entry = latest.entry(row.0).or_insert((i64::MIN, row.clone()));
+                        if loaded > entry.0 {
+                            *entry = (loaded, row);
+                        }
+                    }
+                }
+            }
+            for (order_id, (_, row)) in latest {
+                merged.insert(order_id, row);
+            }
+            let got_batches = storage.sql(
+                "SELECT order_id, order_date, customer_id, product_id, region, quantity, unit_price, discount FROM ice.db.sales_fact",
+            ).await.map_err(|e| e.to_string())?;
+            let got: HashMap<i64, SalesRow> = sales_rows(&got_batches).into_iter().map(|r| (r.0, r)).collect();
+            if got.len() != merged.len() {
+                return Err(format!("merged sales_fact rows {} != {}", got.len(), merged.len()));
+            }
+            for (order_id, want) in &merged {
+                if got.get(order_id) != Some(want) {
+                    return Err(format!("merged sales_fact row {order_id} differs"));
+                }
+            }
+            Ok(())
+        }
+        "W1.3b" => {
+            let mut daily: HashMap<(i32, String), (i64, f64)> = HashMap::new();
+            for row in sales_rows(&data.sales) {
+                if (row.1 as i64) >= anchor - 35 {
+                    let entry = daily.entry((row.1, row.4.clone())).or_default();
+                    entry.0 += 1;
+                    entry.1 += row.5 as f64 * row.6 * (1.0 - row.7);
+                }
+            }
+            let mut monthly: HashMap<(i64, String), (f64, i64)> = HashMap::new();
+            for ((day, region), (_, net)) in &daily {
+                let entry = monthly.entry((month_key(*day as i64), region.clone())).or_default();
+                entry.0 += net;
+                entry.1 += 1;
+            }
+            let got_batches = storage.sql(
+                "SELECT order_date, region, net_revenue, order_count, avg_daily_revenue FROM ice.db.daily_revenue_agg",
+            ).await.map_err(|e| e.to_string())?;
+            use arrow::array::{Array, Date32Array, Float64Array, Int64Array, StringArray};
+            let mut got: HashMap<(i32, String), (i64, f64, f64)> = HashMap::new();
+            for batch in &got_batches {
+                let dates = batch.column(0).as_any().downcast_ref::<Date32Array>().unwrap();
+                let regs = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+                let nets = batch.column(2).as_any().downcast_ref::<Float64Array>().unwrap();
+                let counts = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
+                let avgs = batch.column(4).as_any().downcast_ref::<Float64Array>().unwrap();
+                for i in 0..batch.num_rows() {
+                    got.insert(
+                        (dates.value(i), regs.value(i).to_string()),
+                        (counts.value(i), nets.value(i), avgs.value(i)),
+                    );
+                }
+            }
+            if got.len() != daily.len() {
+                return Err(format!("daily_revenue_agg rows {} != {}", got.len(), daily.len()));
+            }
+            for ((day, region), (count, net)) in &daily {
+                let (got_count, got_net, got_avg) = got.get(&(*day, region.clone()))
+                    .ok_or_else(|| format!("daily_revenue_agg missing ({day}, {region})"))?;
+                let (sum, days) = monthly[&(month_key(*day as i64), region.clone())];
+                if got_count != count || !close(*got_net, *net) || !close(*got_avg, sum / days as f64) {
+                    return Err(format!("daily_revenue_agg mismatch at ({day}, {region})"));
+                }
+            }
+            Ok(())
+        }
+        "W5.4" => {
+            let got_batches = storage.sql(
+                "SELECT customer_id, recency_days, orders_12m, spend_12m, avg_order_value FROM ice.db.features_customer",
+            ).await.map_err(|e| e.to_string())?;
+            let got = feature_rows(&got_batches);
+            if got.len() != data.expected.distinct_customers_sales.len() {
+                return Err(format!(
+                    "features_customer rows {} != distinct customers {}",
+                    got.len(), data.expected.distinct_customers_sales.len()));
+            }
+            let got_ids: HashSet<i64> = got.iter().map(|r| r.0).collect();
+            if got_ids != data.expected.distinct_customers_sales {
+                return Err("features_customer customer set differs".into());
+            }
+            // Probe customer yardstick from the generated sales rows.
+            let day_minus_12m = days_from_civil(2025, 11, 9);
+            let (mut count, mut spend, mut max_day) = (0i64, 0.0f64, i64::MIN);
+            for row in sales_rows(&data.sales) {
+                if row.2 == data.probe_customer && (row.1 as i64) >= day_minus_12m {
+                    count += 1;
+                    spend += row.5 as f64 * row.6 * (1.0 - row.7);
+                    max_day = max_day.max(row.1 as i64);
+                }
+            }
+            let probe = got.iter().find(|r| r.0 == data.probe_customer)
+                .ok_or("features_customer missing probe customer")?;
+            if probe.1 != Some(anchor - max_day) || probe.2 != Some(count)
+                || !close(probe.3.unwrap_or(f64::NAN), spend)
+                || !close(probe.4.unwrap_or(f64::NAN), spend / count as f64) {
+                return Err(format!("features_customer probe row differs: {probe:?}"));
+            }
+            Ok(())
+        }
+        "W5.5" => {
+            let mut last2: HashMap<i64, i32> = HashMap::new();
+            for row in sales_rows(&data.sales) {
+                if (row.1 as i64) >= anchor - 2 {
+                    let entry = last2.entry(row.2).or_insert(row.1);
+                    if row.1 > *entry {
+                        *entry = row.1;
+                    }
+                }
+            }
+            let got_batches = storage.sql(
+                "SELECT customer_id, recency_days, orders_12m, spend_12m, avg_order_value FROM ice.db.features_customer",
+            ).await.map_err(|e| e.to_string())?;
+            let got = feature_rows(&got_batches);
+            let mut seen = 0usize;
+            for row in &got {
+                if let Some(day) = last2.get(&row.0) {
+                    seen += 1;
+                    if row.1 != Some(anchor - *day as i64) {
+                        return Err(format!(
+                            "W5.5 recency for customer {} is {:?}, want {}",
+                            row.0, row.1, anchor - *day as i64));
+                    }
+                }
+            }
+            if seen != last2.len() {
+                return Err(format!("W5.5 refreshed {seen} customers, want {}", last2.len()));
+            }
+            Ok(())
+        }
+        other => Err(format!("no mutation check for {other}")),
+    }
 }
 
 async fn write_path_check(storage: &StorageCatalog, service: &EngineService, data: &Dataset, ns: &NamespaceIdent) -> String {

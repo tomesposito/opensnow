@@ -76,12 +76,13 @@ UPDATE ice.<namespace>.<table> SET <column> = <expression> [, ...] [WHERE <predi
 The storage parser validates this grammar before DataFusion evaluates any
 expression. Exactly one fully qualified table under `ice` is required.
 Unquoted identifiers fold to lowercase. Quoted identifiers retain case.
-One optional trailing semicolon and SQL comments are accepted. Aliases,
-joins, FROM/USING clauses, subqueries, RETURNING, ORDER BY, LIMIT,
-multiple statements, and duplicate assignments are rejected. Column references in mutation expressions are unqualified. Expressions
-must be deterministic scalar expressions over the row. Aggregates, windows,
-and non-immutable functions are rejected. Unsupported non-mutation statements
-retain DataFusion's errors, including MERGE on this provider.
+One optional trailing semicolon and SQL comments are accepted. For plain
+DELETE and UPDATE, aliases, joins, FROM/USING clauses, subqueries,
+RETURNING, ORDER BY, LIMIT, multiple statements, and duplicate assignments
+are rejected. Column references in mutation expressions are unqualified.
+Expressions must be deterministic scalar expressions over the row.
+Aggregates, windows, and non-immutable functions are rejected. Unsupported
+non-mutation statements retain DataFusion's errors.
 
 The writer loads one table snapshot, plans its files, and reads each file's
 tasks through the Iceberg Arrow reader. In this pinned crate FileScanTask
@@ -115,6 +116,49 @@ path. It removes all files in the loaded snapshot and writes the supplied
 row set in one snapshot. An empty replacement, including on a new empty
 table, is valid. Input column names, order, and types must match the table.
 
+### MERGE and UPDATE with FROM (issue #18)
+
+`execute` also routes MERGE and UPDATE with a FROM clause to the writer.
+The accepted grammar is:
+
+```sql
+MERGE INTO ice.<namespace>.<table> [AS <alias>]
+USING <table or subquery> [AS <alias>] ON <condition>
+[WHEN MATCHED [AND <predicate>] THEN UPDATE SET <column> = <expression> [, ...]
+ | WHEN MATCHED [AND <predicate>] THEN DELETE
+ | WHEN NOT MATCHED [AND <predicate>] THEN INSERT [(<column> [, ...])] VALUES (<expression> [, ...])] ...
+
+UPDATE ice.<namespace>.<table> [AS <alias>]
+SET <column> = <expression> [, ...]
+FROM <table or subquery> [AS <alias>]
+[WHERE <condition>]
+```
+
+The joined row set is computed with ordinary SELECTs over the catalog,
+with the target and the source as CTEs, then committed through
+`replace_all`: exactly one overwrite snapshot per effective statement,
+through the same atomic catalog path as every other mutation. A statement
+that applies to no row creates no snapshot. Unlike plain DELETE and
+UPDATE, a joined mutation rewrites every live file; per-file reuse is a
+later optimization, not a correctness requirement.
+
+Semantics: WHEN clauses apply in written order, first match wins.
+Matched UPDATE assignments see the original target row and the source
+row. INSERT columns that are not listed get NULL, and the usual required
+column check rejects a NULL landing in a non-nullable column. If the
+source matches one target row more than once, the statement fails and
+commits nothing; it does not pick a winner. The same rule covers UPDATE
+with FROM. Assignment, predicate, and join expressions must be
+deterministic scalar expressions: subqueries, aggregates, window
+functions, and nondeterministic calls are rejected before anything runs.
+
+Limits: one source table or subquery per statement (no join chains in
+FROM), no RETURNING, no WHEN NOT MATCHED BY SOURCE, no MERGE INSERT ROW,
+and one VALUES row per insert clause. The copy-on-write schema check now
+names its cause: a table at a format version other than v2 gets a
+format version error, and a partitioned v2 table gets a partitioning
+error. The old combined message blamed partitioning for both.
+
 Shipped limits: local filesystem warehouses, unpartitioned Iceberg v2,
 Parquet data files, no delete files, and no encrypted tables. Acceptance uses
 SQLite and BIGINT columns with nullable values. The catalog's existing
@@ -131,7 +175,12 @@ The writer acceptance tests cover selective DELETE and UPDATE, exact file
 reuse, no-match no-ops, null predicates, simultaneous assignments, full-table
 DELETE, bulk and empty replacement, historical reads, snapshot counts and
 summaries, invalid SQL and values, mixed-manifest sequence preservation, and
-stale-removal rejection. See `crates/opensnow-storage/tests/writer.rs`.
+stale-removal rejection. The issue #18 tests add MERGE matched update,
+matched delete with clause predicates in order, not-matched insert,
+subquery sources, no-op merges without a snapshot, duplicate-match
+rejection, UPDATE with FROM over table and derived sources, typed DATE,
+VARCHAR, and DOUBLE merges, and the format version error text for a v3
+table. See `crates/opensnow-storage/tests/writer.rs`.
 
 ## Slice 1.5: compaction and maintenance
 
