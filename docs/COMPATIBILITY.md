@@ -9,6 +9,13 @@ Two facts from the spike shape this list:
 - The dialect setting barely matters. Results under the Generic and PostgreSql parser dialects were the same at execution time. The compat layer parses with Generic and owns dialect behaviour itself.
 - Standard SQL is solid, the Postgres core is close, and the Snowflake layer is a set of small fixes. Of 37 statements, 23 run as written, 7 run after a verified rewrite, and 7 sit in the named gaps.
 
+Later additions, verified outside the spike: MERGE and UPDATE with a
+FROM clause run through the storage writer since issue #18, using the
+SF04 and SF05 rewrites above where a workload statement needs them.
+The writer's grammar and limits are in docs/STORAGE.md (Slice 1.4,
+MERGE and UPDATE with FROM). They are not spike statements and do not
+change the counts above.
+
 ## 1. Runs as written
 
 These statements parse and execute on DataFusion 50.3.0 with no rewrite.
