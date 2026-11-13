@@ -153,6 +153,40 @@ async fn quoted_identifiers_do_not_bypass_tenant_isolation() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn comma_joins_do_not_bypass_tenant_isolation() -> TestResult {
+    // Issue #22 audit reproduction, end to end: before the fix, a
+    // comma separated FROM list let a second table reference pass the
+    // guard unchecked, so a cross-tenant read and an INSERT INTO ...
+    // SELECT copy both succeeded against the shared catalog.
+    let Some(fx) = setup("comma").await? else { return Ok(()); };
+    let a = fx.plane.provision_tenant("tenant-a", "admin@a.test", "pass-a-admin", None, None).await?;
+    let b = fx.plane.provision_tenant("tenant-b", "admin@b.test", "pass-b-admin", None, None).await?;
+    fx.plane.execute_authenticated(&a.token, "CREATE TABLE events (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&a.token, "INSERT INTO events VALUES (1), (2), (3)").await?;
+    fx.plane.execute_authenticated(&b.token, "CREATE TABLE events (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&b.token, "INSERT INTO events VALUES (7), (8)").await?;
+    fx.plane.execute_authenticated(&b.token, "CREATE TABLE notes (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&b.token, "INSERT INTO notes VALUES (7)").await?;
+    // Cross-tenant comma reads, three part and two part forms.
+    let cross = format!("SELECT id FROM notes, ice.{}.events", a.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &cross).await, Err(ControlError::AccessDenied(_))));
+    let cross_bare = format!("SELECT id FROM notes, {}.events", a.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &cross_bare).await, Err(ControlError::AccessDenied(_))));
+    // The exfiltration copy is denied and no rows move.
+    let exfil = format!("INSERT INTO events SELECT id FROM notes, ice.{}.events", a.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &exfil).await, Err(ControlError::AccessDenied(_))));
+    let b_rows = fx.plane.execute_authenticated(&b.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&b_rows.batches), BTreeSet::from([7, 8]));
+    // The victim still reads its own rows, untouched.
+    let a_rows = fx.plane.execute_authenticated(&a.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&a_rows.batches), BTreeSet::from([1, 2, 3]));
+    // An own tables comma join returns the joined rows.
+    let joined = fx.plane.execute_authenticated(&b.token, "SELECT events.id FROM events, notes WHERE events.id = notes.id").await?;
+    assert_eq!(ids(&joined.batches), BTreeSet::from([7]));
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suspend_blocks_and_unsuspend_restores() -> TestResult {
     let Some(fx) = setup("susp").await? else { return Ok(()); };
     let a = fx.plane.provision_tenant("tenant-a", "admin@a.test", "pass-a-admin", None, None).await?;

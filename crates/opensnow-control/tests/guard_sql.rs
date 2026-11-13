@@ -58,3 +58,80 @@ fn plain_table_references_still_qualify() {
     assert!(denied("SELECT id FROM ice.tdeadbeefdeadbeef.events"));
     assert!(denied("SELECT id FROM tdeadbeefdeadbeef.events"));
 }
+
+#[test]
+fn comma_join_references_are_denied_or_qualified() {
+    // Audit reproduction for issue #22: the lexical qualifier captured
+    // only the token after FROM or JOIN, so every later element of a
+    // comma separated FROM list passed through unchecked.
+    assert!(denied("SELECT id FROM events, ice.tdeadbeefdeadbeef.events"));
+    assert!(denied("SELECT id FROM events, tdeadbeefdeadbeef.events"));
+    // The victim in the first position was already denied and stays
+    // denied when an own table follows it.
+    assert!(denied("SELECT id FROM ice.tdeadbeefdeadbeef.events, events"));
+    // The victim as the last of three elements is denied too.
+    assert!(denied("SELECT id FROM events, other_events, ice.tdeadbeefdeadbeef.events"));
+    // Comma lists in a UNION branch and inside subqueries are covered.
+    assert!(denied(
+        "SELECT id FROM events UNION ALL SELECT id FROM other_events, ice.tdeadbeefdeadbeef.events"
+    ));
+    assert!(denied(
+        "SELECT id FROM events WHERE id IN (SELECT id FROM other_events, ice.tdeadbeefdeadbeef.events)"
+    ));
+    assert!(denied(
+        "SELECT id FROM (SELECT id FROM other_events, ice.tdeadbeefdeadbeef.events) AS sub"
+    ));
+    // The INSERT INTO ... SELECT exfiltration shape is denied: the
+    // comma joined source is checked, not just the insert target.
+    assert!(denied("INSERT INTO events SELECT id FROM other_events, ice.tdeadbeefdeadbeef.events"));
+    assert!(denied("INSERT INTO events SELECT id FROM other_events, tdeadbeefdeadbeef.events"));
+
+    // A legitimate comma join of two own tables qualifies both names.
+    let (rewritten, access) = guard_sql(NS, "SELECT id FROM events, other_events").unwrap();
+    assert_eq!(rewritten, format!("SELECT id FROM ice.{NS}.events, ice.{NS}.other_events"));
+    assert!(matches!(access, Access::Read));
+
+    // A bare own table mixed with an explicit own three part name
+    // passes, with both rendered in the guard's own form.
+    let (rewritten, _) = guard_sql(NS, &format!("SELECT id FROM events, ice.{NS}.other_events")).unwrap();
+    assert_eq!(rewritten, format!("SELECT id FROM ice.{NS}.events, ice.{NS}.other_events"));
+
+    // A legitimate INSERT INTO ... SELECT with a comma source
+    // qualifies the target and both source tables.
+    let (rewritten, access) =
+        guard_sql(NS, "INSERT INTO events SELECT id FROM other_events, more_events").unwrap();
+    assert_eq!(
+        rewritten,
+        format!("INSERT INTO ice.{NS}.events SELECT id FROM ice.{NS}.other_events, ice.{NS}.more_events")
+    );
+    assert!(matches!(access, Access::Write));
+
+    // A plain JOIN still qualifies both sides.
+    let (rewritten, _) =
+        guard_sql(NS, "SELECT id FROM events JOIN other_events ON events.id = other_events.id").unwrap();
+    assert_eq!(
+        rewritten,
+        format!("SELECT id FROM ice.{NS}.events JOIN ice.{NS}.other_events ON events.id = other_events.id")
+    );
+}
+
+#[test]
+fn cte_names_are_not_qualified_as_tables() {
+    // A CTE reference names the query's own derived result. Qualifying
+    // it would point it at a stored table that does not exist. Tables
+    // inside the CTE body and beside the reference are still bound to
+    // the tenant namespace.
+    let (rewritten, access) =
+        guard_sql(NS, "WITH recent AS (SELECT id FROM events) SELECT id FROM recent, other_events").unwrap();
+    assert_eq!(
+        rewritten,
+        format!(
+            "WITH recent AS (SELECT id FROM ice.{NS}.events) SELECT id FROM recent, ice.{NS}.other_events"
+        )
+    );
+    assert!(matches!(access, Access::Read));
+    // A cross-tenant table beside a CTE reference is still denied.
+    assert!(denied(
+        "WITH recent AS (SELECT id FROM events) SELECT id FROM recent, ice.tdeadbeefdeadbeef.events"
+    ));
+}

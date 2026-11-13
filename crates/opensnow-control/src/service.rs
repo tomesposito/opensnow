@@ -1,11 +1,12 @@
 //! Tenant lifecycle and the authenticated execute path. One auth check is
 //! shared by the in-process SQL endpoint and any future UI caller. There is
 //! no HTTP transport in this slice.
-use std::{sync::Arc, time::Duration};
+use std::{ops::ControlFlow, sync::Arc, time::Duration};
 use iceberg::{NamespaceIdent, TableIdent};
 use iceberg_datafusion::IcebergCatalogProvider;
 use opensnow_engine::{CostRecord, EngineService, QueryResult, ResourceGroup, TenantCostSummary};
 use opensnow_storage::StorageCatalog;
+use sqlparser::ast::{Ident, ObjectName, ObjectNamePart, Query, TableFactor, VisitMut, VisitorMut};
 use sqlparser::{dialect::GenericDialect, parser::Parser};
 use tokio::sync::Mutex;
 use crate::credentials;
@@ -29,19 +30,20 @@ fn valid_ident(s: &str) -> bool {
 pub enum Access { Read, Write }
 
 /// Qualifies every table reference to the tenant namespace and rejects any
-/// reference outside it. Fail closed: quoted identifiers, comments, CTE
-/// names, and multi-statement input are rejected or fail at execution.
+/// reference outside it. Fail closed: quoted identifiers, comments, and
+/// multi-statement input are rejected before parsing, and any table
+/// reference shape the AST rewrite cannot bind is rejected by it.
 pub fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
     if sql.contains("--") || sql.contains("/*") { return Err(ControlError::AccessDenied("comments are not accepted".into())); }
-    // Quoted identifiers are never inspected by the lexical qualifier
-    // below and the guard itself never emits them, so any double quote
-    // fails closed (issue #23). This also rejects double quotes inside
-    // string literals; a lexical scan cannot tell the two apart.
+    // Quoted identifiers are never inspected by the rewrite below and
+    // the guard itself never emits them, so any double quote fails
+    // closed (issue #23). This also rejects double quotes inside string
+    // literals; the raw text cannot tell the two apart.
     if sql.contains('"') { return Err(ControlError::AccessDenied("quoted identifiers are not accepted".into())); }
     let dialect = GenericDialect {};
     let mut statements = Parser::parse_sql(&dialect, sql).map_err(|e| ControlError::InvalidInput(e.to_string()))?;
     if statements.len() != 1 { return Err(ControlError::AccessDenied("exactly one statement is required".into())); }
-    let stmt = statements.pop().unwrap();
+    let mut stmt = statements.pop().unwrap();
     let access = match &stmt {
         sqlparser::ast::Statement::Query(_) => Access::Read,
         sqlparser::ast::Statement::Insert(_) | sqlparser::ast::Statement::CreateTable(_)
@@ -49,45 +51,106 @@ pub fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
         | sqlparser::ast::Statement::Update { .. } => Access::Write,
         _ => return Err(ControlError::AccessDenied("statement type is not allowed".into())),
     };
-    let rewritten = qualify_tables(namespace, sql)?;
+    let rewritten = qualify_statement(namespace, &mut stmt)?;
     Ok((rewritten, access))
 }
 
-/// Scans for FROM, JOIN, INTO, and TABLE keywords and qualifies the name
-/// that follows each one. Names are plain identifiers only.
-fn qualify_tables(namespace: &str, sql: &str) -> Result<String> {
-    let bytes = sql.as_bytes();
-    let mut out = String::with_capacity(sql.len() + 32);
-    let mut i = 0usize;
-    let mut found = false;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
-            let word = &sql[start..i];
-            out.push_str(word);
-            if matches!(word.to_ascii_uppercase().as_str(), "FROM" | "JOIN" | "INTO" | "TABLE") {
-                let mut j = i;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() { j += 1; }
-                let nstart = j;
-                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'.') { j += 1; }
-                let name = &sql[nstart..j];
-                if !name.is_empty() {
-                    found = true;
-                    out.push(' ');
-                    out.push_str(&qualify_name(namespace, name)?);
-                    i = j;
-                }
-            }
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
-        }
+/// Rewrites the parsed statement so every table reference names a table
+/// in the tenant namespace, then renders it back to SQL. The rewrite
+/// walks the AST, so every element of a comma separated FROM list is
+/// visited, not just the name after a keyword (issue #22). Table
+/// references inside subqueries, set operation branches, and the source
+/// of INSERT INTO ... SELECT are visited the same way.
+fn qualify_statement(namespace: &str, stmt: &mut sqlparser::ast::Statement) -> Result<String> {
+    let mut qualifier = TableQualifier { namespace, cte_scopes: Vec::new(), qualified: 0, error: None };
+    let flow = stmt.visit(&mut qualifier);
+    if let Some(error) = qualifier.error { return Err(error); }
+    if matches!(flow, ControlFlow::Break(())) {
+        return Err(ControlError::AccessDenied("statement could not be qualified".into()));
     }
-    if !found && !sql.to_ascii_uppercase().contains("SELECT") {
+    if qualifier.qualified == 0 && !matches!(stmt, sqlparser::ast::Statement::Query(_)) {
         return Err(ControlError::AccessDenied("no table reference found".into()));
     }
-    Ok(out)
+    Ok(stmt.to_string())
+}
+
+/// AST visitor that qualifies each relation it reaches. CTE names in
+/// scope are left alone: a CTE reference names the query's own derived
+/// result, not a stored table, so qualifying it would point it at a
+/// table that does not exist. Every other relation must resolve to the
+/// tenant namespace through qualify_name or the visit stops with the
+/// error recorded in `error`.
+struct TableQualifier<'a> {
+    namespace: &'a str,
+    cte_scopes: Vec<Vec<String>>,
+    qualified: usize,
+    error: Option<ControlError>,
+}
+
+impl TableQualifier<'_> {
+    fn fail(&mut self, message: String) -> ControlFlow<()> {
+        self.error = Some(ControlError::AccessDenied(message));
+        ControlFlow::Break(())
+    }
+
+    fn is_cte(&self, name: &str) -> bool {
+        let lowered = name.to_ascii_lowercase();
+        self.cte_scopes.iter().any(|scope| scope.iter().any(|cte| *cte == lowered))
+    }
+}
+
+impl VisitorMut for TableQualifier<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<()> {
+        let names = match &query.with {
+            Some(with) => with.cte_tables.iter().map(|cte| cte.alias.name.value.to_ascii_lowercase()).collect(),
+            None => Vec::new(),
+        };
+        self.cte_scopes.push(names);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &mut Query) -> ControlFlow<()> {
+        self.cte_scopes.pop();
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, factor: &mut TableFactor) -> ControlFlow<()> {
+        match factor {
+            TableFactor::Table { args, .. } => {
+                if args.is_some() {
+                    return self.fail("table functions are not accepted".into());
+                }
+                ControlFlow::Continue(())
+            }
+            TableFactor::Derived { .. } | TableFactor::NestedJoin { .. } => ControlFlow::Continue(()),
+            _ => self.fail("table reference shape is not accepted".into()),
+        }
+    }
+
+    fn pre_visit_relation(&mut self, relation: &mut ObjectName) -> ControlFlow<()> {
+        let mut parts: Vec<String> = Vec::with_capacity(relation.0.len());
+        for part in &relation.0 {
+            match part {
+                ObjectNamePart::Identifier(ident) => parts.push(ident.value.clone()),
+                _ => return self.fail("table reference shape is not accepted".into()),
+            }
+        }
+        if parts.len() == 1 && self.is_cte(&parts[0]) { return ControlFlow::Continue(()); }
+        let joined = parts.join(".");
+        match qualify_name(self.namespace, &joined) {
+            Ok(qualified) => {
+                *relation = ObjectName(qualified.split('.').map(|part| ObjectNamePart::Identifier(Ident::new(part))).collect());
+                self.qualified += 1;
+                ControlFlow::Continue(())
+            }
+            Err(error) => {
+                self.error = Some(error);
+                ControlFlow::Break(())
+            }
+        }
+    }
 }
 
 fn qualify_name(namespace: &str, name: &str) -> Result<String> {
