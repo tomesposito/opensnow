@@ -33,6 +33,11 @@ pub enum Access { Read, Write }
 /// names, and multi-statement input are rejected or fail at execution.
 pub fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
     if sql.contains("--") || sql.contains("/*") { return Err(ControlError::AccessDenied("comments are not accepted".into())); }
+    // Quoted identifiers are never inspected by the lexical qualifier
+    // below and the guard itself never emits them, so any double quote
+    // fails closed (issue #23). This also rejects double quotes inside
+    // string literals; a lexical scan cannot tell the two apart.
+    if sql.contains('"') { return Err(ControlError::AccessDenied("quoted identifiers are not accepted".into())); }
     let dialect = GenericDialect {};
     let mut statements = Parser::parse_sql(&dialect, sql).map_err(|e| ControlError::InvalidInput(e.to_string()))?;
     if statements.len() != 1 { return Err(ControlError::AccessDenied("exactly one statement is required".into())); }

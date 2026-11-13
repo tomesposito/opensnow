@@ -123,6 +123,36 @@ async fn isolation_between_tenants() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quoted_identifiers_do_not_bypass_tenant_isolation() -> TestResult {
+    // Issue #23 audit reproduction, end to end: before the fix, the
+    // quoted forms below passed the guard unchanged and executed
+    // against the shared catalog.
+    let Some(fx) = setup("quote").await? else { return Ok(()); };
+    let a = fx.plane.provision_tenant("tenant-a", "admin@a.test", "pass-a-admin", None, None).await?;
+    let b = fx.plane.provision_tenant("tenant-b", "admin@b.test", "pass-b-admin", None, None).await?;
+    fx.plane.execute_authenticated(&a.token, "CREATE TABLE events (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&a.token, "INSERT INTO events VALUES (1), (2), (3)").await?;
+    fx.plane.execute_authenticated(&b.token, "CREATE TABLE events (id BIGINT NOT NULL)").await?;
+    fx.plane.execute_authenticated(&b.token, "INSERT INTO events VALUES (7), (8)").await?;
+    // Quoted cross-tenant read, the audit's exact shape.
+    let quoted_cross = format!(r#"SELECT id FROM "ice"."{}"."events""#, a.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &quoted_cross).await, Err(ControlError::AccessDenied(_))));
+    // Quoted read of the caller's own namespace is also rejected:
+    // the guard never emits quoted names.
+    let quoted_own = format!(r#"SELECT id FROM "ice"."{}"."events""#, b.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &quoted_own).await, Err(ControlError::AccessDenied(_))));
+    // A quoted branch inside a UNION ALL does not slip through.
+    let quoted_union = format!(r#"SELECT id FROM events UNION ALL SELECT id FROM "ice"."{}"."events""#, a.tenant.namespace);
+    assert!(matches!(fx.plane.execute_authenticated(&b.token, &quoted_union).await, Err(ControlError::AccessDenied(_))));
+    // Both tenants' plain reads still work and stay separate.
+    let a_rows = fx.plane.execute_authenticated(&a.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&a_rows.batches), BTreeSet::from([1, 2, 3]));
+    let b_rows = fx.plane.execute_authenticated(&b.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&b_rows.batches), BTreeSet::from([7, 8]));
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn suspend_blocks_and_unsuspend_restores() -> TestResult {
     let Some(fx) = setup("susp").await? else { return Ok(()); };
     let a = fx.plane.provision_tenant("tenant-a", "admin@a.test", "pass-a-admin", None, None).await?;
