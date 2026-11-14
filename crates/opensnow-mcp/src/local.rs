@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use iceberg::NamespaceIdent;
 use iceberg_datafusion::IcebergCatalogProvider;
-use opensnow_control::{guard_sql, Access};
+use opensnow_control::{guard_sql, uses_storage_writer, Access};
 use opensnow_engine::{CostRecord, EngineService, QueryResult, ResourceGroup, TenantCostSummary};
 use opensnow_storage::{CatalogConfig, StorageCatalog};
 use tokio::sync::Mutex;
@@ -53,7 +53,17 @@ impl LocalDb {
     pub async fn execute(&self, sql: &str) -> Result<QueryResult, BoxError> {
         let (rewritten, _access) = guard_sql(LOCAL_NAMESPACE, sql).map_err(|e| -> BoxError { e.to_string().into() })?;
         let engine = self.engine.lock().await;
-        Ok(engine.execute(LOCAL_TENANT, &rewritten).await?)
+        if uses_storage_writer(&rewritten)? {
+            Ok(engine.execute_mutation(LOCAL_TENANT, &rewritten, async {
+                self.storage.refresh().await?;
+                let provider = IcebergCatalogProvider::try_new(self.storage.catalog.clone()).await?;
+                self.storage.execute(&rewritten).await?;
+                engine.context(LOCAL_TENANT)?.register_catalog("ice", Arc::new(provider));
+                Ok(())
+            }).await?)
+        } else {
+            Ok(engine.execute(LOCAL_TENANT, &rewritten).await?)
+        }
     }
 
     pub fn classify(&self, sql: &str) -> Result<Access, BoxError> {

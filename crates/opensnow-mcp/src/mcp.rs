@@ -49,7 +49,7 @@ fn tool_defs() -> Value {
         {"name": "search_schema", "description": "Find tables and columns whose names contain the query text, case-insensitive.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
         {"name": "sample_rows", "description": "Read up to limit sample rows from one table (default 10, max 100).", "inputSchema": {"type": "object", "properties": {"table": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["table"]}},
         {"name": "query", "description": "Run one read-only SQL statement. Write statements are refused; use execute_write.", "inputSchema": sql},
-        {"name": "execute_write", "description": "Run one write statement (create, insert, update, delete, drop). Hosted: needs a write-scope token.", "inputSchema": sql},
+        {"name": "execute_write", "description": "Run one write statement (create, insert, update, delete, merge, drop). Hosted: needs a write-scope token.", "inputSchema": sql},
         {"name": "cost_records", "description": "The caller's query log: every executed query with its cost in dollars.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "cost_summary", "description": "The caller's cost totals across all recorded queries.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "docs_search", "description": "Search the shipped opensnow docs and return matching lines.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
@@ -268,7 +268,7 @@ fn classify_kind(sql: &str) -> Result<Access, BoxError> {
         sqlparser::ast::Statement::Query(_) => Ok(Access::Read),
         sqlparser::ast::Statement::Insert(_) | sqlparser::ast::Statement::CreateTable(_)
         | sqlparser::ast::Statement::Drop { .. } | sqlparser::ast::Statement::Delete(_)
-        | sqlparser::ast::Statement::Update { .. } => Ok(Access::Write),
+        | sqlparser::ast::Statement::Update { .. } | sqlparser::ast::Statement::Merge { .. } => Ok(Access::Write),
         _ => Err("statement type is not allowed".into()),
     }
 }

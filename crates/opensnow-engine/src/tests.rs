@@ -226,3 +226,31 @@ async fn metering_isolated_per_tenant_and_background_records() {
     assert!(matches!(service.cost_summary("missing"), Err(EngineError::UnknownTenant)));
     assert!(matches!(service.record_background("missing", "compaction", Duration::ZERO, 0, 0), Err(EngineError::UnknownTenant)));
 }
+
+#[tokio::test]
+async fn storage_mutation_shares_admission_and_records_failures() {
+    let mut service = EngineService::new();
+    service.register_tenant("a", ResourceGroup { queue_capacity: 0, ..Default::default() }).unwrap();
+    let guard = service.acquire("a").await.unwrap();
+    let result = service.execute_mutation("a", "DELETE FROM events", async {
+        panic!("storage must not run without admission");
+    }).await;
+    assert!(matches!(result, Err(EngineError::AdmissionDenied)));
+    assert!(service.cost_records("a").unwrap().is_empty());
+    drop(guard);
+    let result = service.execute_mutation("a", "DELETE FROM events", async {
+        Err("storage failure".into())
+    }).await;
+    assert!(result.unwrap_err().to_string().contains("storage failure"));
+    let records = service.cost_records("a").unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, CostRecordStatus::Failed);
+    let result = service.execute_mutation("a", "DELETE FROM events", async { Ok(()) }).await.unwrap();
+    assert!(result.batches.is_empty());
+    assert_eq!(result.outcome.cost_record_seq, 2);
+    assert_eq!(result.outcome.cost_units_charged, 0);
+    assert_eq!(service.charged_cost("a").unwrap(), 0);
+    let records = service.cost_records("a").unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].status, CostRecordStatus::Completed);
+}

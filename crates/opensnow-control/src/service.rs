@@ -48,11 +48,20 @@ pub fn guard_sql(namespace: &str, sql: &str) -> Result<(String, Access)> {
         sqlparser::ast::Statement::Query(_) => Access::Read,
         sqlparser::ast::Statement::Insert(_) | sqlparser::ast::Statement::CreateTable(_)
         | sqlparser::ast::Statement::Drop { .. } | sqlparser::ast::Statement::Delete(_)
-        | sqlparser::ast::Statement::Update { .. } => Access::Write,
+        | sqlparser::ast::Statement::Update { .. } | sqlparser::ast::Statement::Merge { .. } => Access::Write,
         _ => return Err(ControlError::AccessDenied("statement type is not allowed".into())),
     };
     let rewritten = qualify_statement(namespace, &mut stmt)?;
     Ok((rewritten, access))
+}
+
+/// Classifies guarded SQL using the same parser as the guard and writer.
+/// Only these mutations use the copy-on-write storage route.
+pub fn uses_storage_writer(sql: &str) -> Result<bool> {
+    let statements = Parser::parse_sql(&GenericDialect {}, sql)
+        .map_err(|e| ControlError::InvalidInput(e.to_string()))?;
+    Ok(matches!(statements.as_slice(), [sqlparser::ast::Statement::Merge { .. }
+        | sqlparser::ast::Statement::Update { .. } | sqlparser::ast::Statement::Delete(_)]))
 }
 
 /// Rewrites the parsed statement so every table reference names a table
@@ -402,7 +411,7 @@ impl ControlPlane {
     }
 
     /// Auth, status, scope, namespace, and cost cap checks all happen before
-    /// EngineService::execute runs the SQL. Write scope implies read.
+    /// SQL execution. Write scope implies read.
     pub async fn execute_authenticated(&self, plaintext_token: &str, sql: &str) -> Result<QueryResult> {
         let principal = self.authenticate_token(plaintext_token).await?;
         let tenant = self.store.get_tenant_by_id(&principal.tenant_id).await.map_err(|_| ControlError::AuthFailed)?
@@ -415,7 +424,17 @@ impl ControlPlane {
         };
         if !allowed { return Err(ControlError::AccessDenied("token scope does not allow this statement".into())); }
         let engine = self.engine.lock().await;
-        let result = engine.execute(&principal.tenant_id, &rewritten).await;
+        let result = if uses_storage_writer(&rewritten)? {
+            engine.execute_mutation(&principal.tenant_id, &rewritten, async {
+                self.storage.refresh().await?;
+                let provider = IcebergCatalogProvider::try_new(self.storage.catalog.clone()).await?;
+                self.storage.execute(&rewritten).await?;
+                engine.context(&principal.tenant_id)?.register_catalog("ice", Arc::new(provider));
+                Ok(())
+            }).await
+        } else {
+            engine.execute(&principal.tenant_id, &rewritten).await
+        };
         // Metering records sync to Postgres on both paths: a failed or
         // cap-aborted query executed and left a record too. On the error
         // path the original engine error wins over a sync failure.

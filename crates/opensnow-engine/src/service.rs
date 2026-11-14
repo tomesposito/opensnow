@@ -215,6 +215,29 @@ impl EngineService {
         tenant.check_cap()?; // A query ahead of this waiter may have exhausted the cap.
         Ok(AdmissionGuard { _running: running, _outstanding: outstanding })
     }
+    /// Runs a storage mutation under the same admission and metering rules
+    /// as a query returning no batches. The future is polled only after admission.
+    pub async fn execute_mutation<F>(&self, name: &str, sql: &str, mutation: F) -> Result<QueryResult, EngineError>
+    where F: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        let start = Instant::now();
+        let started_at_unix_ms = unix_now_ms();
+        let _guard = self.acquire(name).await?;
+        let tenant = self.tenant(name)?;
+        let result = mutation.await;
+        let elapsed = start.elapsed();
+        let status = if result.is_ok() { CostRecordStatus::Completed } else { CostRecordStatus::Failed };
+        let record = tenant.record(name, CostRecordKind::Query, status, Some(sql.to_string()), None,
+            started_at_unix_ms, elapsed, 0, 0);
+        result.map_err(|e| EngineError::Execution(DataFusionError::External(e)))?;
+        Ok(QueryResult {
+            batches: Vec::new(),
+            outcome: QueryOutcome {
+                rows_returned: 0, cost_units_charged: 0, elapsed,
+                cost_record_seq: record.seq, bytes_returned: 0,
+                vcpu_seconds: record.vcpu_seconds, cost_dollars: record.cost_dollars,
+            },
+        })
+    }
     pub async fn execute(&self, name: &str, sql: &str) -> Result<QueryResult, EngineError> {
         let start = Instant::now();
         let started_at_unix_ms = unix_now_ms();

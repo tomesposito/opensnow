@@ -31,6 +31,12 @@ cost units charged, and elapsed time including admission and planning. Errors
 distinguish UnknownTenant, AdmissionDenied, CostCapExceeded, and Execution.
 DataFusion errors, including Resources exhausted, remain wrapped intact.
 
+`execute_mutation` applies the same admission and cap checks to a storage
+writer operation. Hosted and local MERGE, UPDATE, and DELETE use this helper.
+It records completed or failed work as a query with no returned rows or
+batches, using elapsed time and the tenant's partitions for dollar metering.
+Other SQL continues through `execute`.
+
 ## Cost enforcement
 
 One cost unit is one row in a returned stream batch. These deterministic units

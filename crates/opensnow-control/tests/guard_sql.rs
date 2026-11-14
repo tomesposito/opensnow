@@ -135,3 +135,30 @@ fn cte_names_are_not_qualified_as_tables() {
         "WITH recent AS (SELECT id FROM events) SELECT id FROM recent, ice.tdeadbeefdeadbeef.events"
     ));
 }
+
+#[test]
+fn merge_and_update_from_qualify_all_relations() {
+    for prefix in ["".to_string(), format!("{NS}."), format!("ice.{NS}.")] {
+        let (sql, access) = guard_sql(NS, &format!(
+            "MERGE INTO {prefix}events AS e USING {prefix}incoming AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.value = i.value WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)"
+        )).unwrap();
+        assert!(matches!(access, Access::Write));
+        assert!(sql.contains(&format!("INTO ice.{NS}.events AS e USING ice.{NS}.incoming AS i")), "{sql}");
+    }
+    let (sql, _) = guard_sql(NS,
+        "MERGE INTO events AS e USING (SELECT id FROM incoming) AS i ON e.id = i.id WHEN MATCHED AND e.id IN (SELECT id FROM allowed) THEN DELETE"
+    ).unwrap();
+    for name in ["events", "incoming", "allowed"] {
+        assert!(sql.contains(&format!("ice.{NS}.{name}")), "{sql}");
+    }
+    let (sql, access) = guard_sql(NS, "UPDATE events AS e SET value = i.value FROM incoming AS i WHERE e.id = i.id").unwrap();
+    assert!(matches!(access, Access::Write));
+    assert_eq!(sql, format!("UPDATE ice.{NS}.events AS e SET value = i.value FROM ice.{NS}.incoming AS i WHERE e.id = i.id"));
+    for sql in [
+        "MERGE INTO other.events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE",
+        "MERGE INTO events AS e USING other.incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE",
+        "MERGE INTO events AS e USING (SELECT id FROM other.incoming) AS i ON e.id = i.id WHEN MATCHED THEN DELETE",
+        "MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED AND e.id IN (SELECT id FROM other.allowed) THEN DELETE",
+        "UPDATE events AS e SET value = i.value FROM other.incoming AS i WHERE e.id = i.id",
+    ] { assert!(denied(sql), "{sql}"); }
+}

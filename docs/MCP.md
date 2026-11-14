@@ -22,6 +22,11 @@ rejected. The namespace is the fixed name `local`. The test suite runs
 the same fixture and the same compatibility queries through local mode
 and through the hosted authenticated path and compares the rows.
 
+MERGE, UPDATE, and DELETE use the storage copy-on-write writer in both
+modes, under engine admission, cap checks, and cost recording. Reads and
+other writes use the engine SQL path. Reads in the same instance see the
+committed mutation.
+
 ## MCP server
 
 The server speaks JSON-RPC 2.0. It handles `initialize`, `ping`,
@@ -42,7 +47,7 @@ Tools:
 | search_schema | Tables and columns whose names contain the query text, case-insensitive. |
 | sample_rows | Up to `limit` rows from one table. Default 10, max 100. |
 | query | One read-only statement. Write statements are refused. |
-| execute_write | One write statement: create, insert, update, delete, drop. Read statements are refused. |
+| execute_write | One write statement: create, insert, update, delete, merge, drop. Read statements are refused. |
 | cost_records | The caller's query log from slice 1.7, with the cost of each query in dollars. |
 | cost_summary | The caller's cost totals. |
 | docs_search | Lines from the shipped docs that match the query text. |
