@@ -259,6 +259,130 @@ async fn http_transport_end_to_end() -> TestResult {
     assert_eq!(status, 200, "mcp over http said {out}");
     assert_eq!(out["result"]["isError"], json!(false));
 
+    let (status, out) = http_request(addr, &req("POST", "/api/execute", Some(&token),
+        &json!({"sql": MERGE_ITEMS}))).await;
+    assert_eq!(status, 200, "HTTP MERGE said {out}");
+    let (status, out) = http_request(addr, &req("POST", "/api/execute", Some(&token),
+        &json!({"sql": "SELECT name FROM items WHERE id = 1"}))).await;
+    assert_eq!(status, 200);
+    assert_eq!(out["rows"], json!([["Alicia"]]));
+
     server.abort();
     fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutations_use_writer_snapshots_and_metering() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("local");
+    let db = LocalDb::open(&root, None).await?;
+    // A second catalog handle observes snapshots without reopening LocalDb.
+    let storage = CatalogConfig::sqlite("opensnow-local", root.join("catalog.db"), root.join("warehouse"))?.connect().await?;
+    let namespace = "local";
+    for sql in [
+        "CREATE TABLE events (id BIGINT NOT NULL, value BIGINT)",
+        "INSERT INTO events VALUES (1, 10), (2, 20), (3, NULL)",
+        "INSERT INTO events VALUES (4, 40), (5, 50)",
+        "CREATE TABLE incoming (id BIGINT NOT NULL, value BIGINT)",
+        "INSERT INTO incoming VALUES (2, 200), (3, 300), (6, 60)",
+    ] { db.execute(sql).await?; }
+    let ident = iceberg::TableIdent::from_strs([namespace, "events"])?;
+    let cases: &[(&str, &[(i64, i64)])] = &[
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.value = i.value WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)", &[(1, 10), (2, 200), (3, 300), (4, 40), (5, 50), (6, 60)]),
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED AND e.value >= 300 THEN DELETE WHEN MATCHED THEN UPDATE SET e.value = i.value", &[(1, 10), (2, 200), (4, 40), (5, 50), (6, 60)]),
+        ("UPDATE events AS e SET value = i.value + 1 FROM incoming AS i WHERE e.id = i.id", &[(1, 10), (2, 201), (4, 40), (5, 50), (6, 61)]),
+        ("UPDATE events SET value = value + 1 WHERE id = 1", &[(1, 11), (2, 201), (4, 40), (5, 50), (6, 61)]),
+        ("DELETE FROM events WHERE id = 5", &[(1, 11), (2, 201), (4, 40), (6, 61)]),
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED AND e.id = 2 THEN UPDATE SET e.value = i.value WHEN MATCHED AND e.id = 6 THEN DELETE WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)", &[(1, 11), (2, 200), (3, 300), (4, 40)]),
+    ];
+    for (sql, expected) in cases {
+        let before = storage.snapshots(&ident).await?;
+        let result = db.execute(sql).await?;
+        assert!(result.batches.is_empty());
+        assert_eq!(result.outcome.cost_units_charged, 0);
+        let records = db.cost_records().await?;
+        let record = records.last().unwrap();
+        assert_eq!(record.seq, result.outcome.cost_record_seq);
+        assert_eq!(record.status, opensnow_engine::CostRecordStatus::Completed);
+        assert_eq!(record.rows_returned, 0);
+        assert_eq!(record.bytes_returned, 0);
+        assert_eq!(record.elapsed, result.outcome.elapsed);
+        assert_eq!(storage.snapshots(&ident).await?.len(), before.len() + 1, "{sql}");
+        let rows = db.execute("SELECT id, value FROM events ORDER BY id").await?;
+        let actual: Vec<(i64, i64)> = rows.batches.iter().flat_map(|batch| {
+            let ids = batch.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            let values = batch.column(1).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            (0..batch.num_rows()).map(|i| (ids.value(i), values.value(i))).collect::<Vec<_>>()
+        }).collect();
+        assert_eq!(&actual, expected, "{sql}");
+    }
+    let before = storage.snapshots(&ident).await?;
+    for sql in ["UPDATE events SET value = 0 WHERE id > 100", "DELETE FROM events WHERE id > 100",
+        "MERGE INTO events AS e USING incoming AS i ON false WHEN MATCHED THEN DELETE"] {
+        db.execute(sql).await?;
+        assert_eq!(storage.snapshots(&ident).await?, before);
+    }
+    let original = db.execute("SELECT id, value FROM events ORDER BY id").await?.batches;
+    db.execute("INSERT INTO incoming VALUES (2, 201)").await?;
+    let error = db.execute("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.value = i.value").await.unwrap_err();
+    assert!(error.to_string().contains("more than once"), "{error}");
+    assert_eq!(storage.snapshots(&ident).await?, before);
+    let records = db.cost_records().await?;
+    assert_eq!(records.last().unwrap().status, opensnow_engine::CostRecordStatus::Failed);
+    assert_eq!(db.execute("SELECT id, value FROM events ORDER BY id").await?.batches, original);
+    Ok(())
+}
+
+const MERGE_ITEMS: &str = "MERGE INTO items AS e USING (SELECT 1 AS id, 'Alicia' AS name) AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.name = i.name";
+
+async fn check_mcp_merge(server: &McpServer, auth: Option<&str>) {
+    let list = rpc(server, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), auth).await;
+    let tools = list["result"]["tools"].as_array().unwrap();
+    let write = tools.iter().find(|tool| tool["name"] == "execute_write").unwrap();
+    assert_eq!(write["description"], "Run one write statement (create, insert, update, delete, merge, drop). Hosted: needs a write-scope token.");
+    for sql in [CREATE, INSERT] {
+        let out = call(server, "execute_write", json!({"sql": sql}), auth).await;
+        assert!(out.get("__error").is_none(), "{out}");
+    }
+    let error = call_err(server, "query", json!({"sql": MERGE_ITEMS}), auth).await;
+    assert!(error.contains("execute_write"), "{error}");
+    let out = call(server, "execute_write", json!({"sql": MERGE_ITEMS}), auth).await;
+    assert!(out.get("__error").is_none(), "{out}");
+    let rows = call(server, "query", json!({"sql": "SELECT id, name FROM items ORDER BY id"}), auth).await;
+    assert_eq!(rows["rows"], json!([["1", "Alicia"], ["2", "Bob"], ["3", "Carol"]]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_mcp_merge_and_query_split() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let server = McpServer::local(LocalDb::open(temp.path().join("local"), None).await?);
+    check_mcp_merge(&server, None).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_mcp_merge_and_scopes() -> TestResult {
+    let Some(fx) = setup("merge").await? else { return Ok(()); };
+    let p = fx.plane.provision_tenant("merge", "admin@merge.test", "s3cret-admin-pass", None, None).await?;
+    let server = McpServer::hosted(fx.plane.clone());
+    check_mcp_merge(&server, Some(&p.token)).await;
+    let read = fx.plane.issue_token(&p.tenant.id, &p.admin_user.id,
+        vec![opensnow_control::TokenScope::Read], None).await?;
+    let error = call_err(&server, "execute_write", json!({"sql": MERGE_ITEMS}), Some(&read.token)).await;
+    assert!(error.contains("scope"), "{error}");
+    let rows = call(&server, "query", json!({"sql": "SELECT name FROM items WHERE id = 1"}), Some(&read.token)).await;
+    assert_eq!(rows["rows"], json!([["Alicia"]]));
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_mutation_checks_cap_before_storage_runs() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let db = LocalDb::open(temp.path().join("local"), Some(0)).await?;
+    for sql in ["DELETE FROM missing WHERE id = 1", "UPDATE missing SET id = 1",
+        "MERGE INTO missing AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE"] {
+        assert!(db.execute(sql).await.unwrap_err().to_string().contains("CostCapExceeded"));
+    }
+    assert!(db.cost_records().await?.is_empty());
+    Ok(())
 }

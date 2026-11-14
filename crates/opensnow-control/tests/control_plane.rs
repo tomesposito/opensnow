@@ -8,6 +8,7 @@ type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 struct Fixture {
     plane: ControlPlane,
+    storage: Arc<opensnow_storage::StorageCatalog>,
     db: String,
     _temp: tempfile::TempDir,
 }
@@ -50,8 +51,9 @@ async fn setup(label: &str) -> Result<Option<Fixture>, Box<dyn std::error::Error
     let temp = tempfile::tempdir()?;
     let storage = CatalogConfig::postgres("control-test", uri.clone(), temp.path().join("warehouse")).connect().await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
-    let plane = ControlPlane::new(store, Arc::new(storage));
-    Ok(Some(Fixture { plane, db, _temp: temp }))
+    let storage = Arc::new(storage);
+    let plane = ControlPlane::new(store, storage.clone());
+    Ok(Some(Fixture { plane, storage, db, _temp: temp }))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -292,5 +294,90 @@ async fn metering_records_read_back_in_dollars_per_tenant() -> TestResult {
     assert_eq!(fx.plane.cost_summary(&b.token).await?.record_count, 0);
     assert!(matches!(fx.plane.cost_records("osn_not_a_real_token").await, Err(ControlError::AuthFailed)));
     assert!(matches!(fx.plane.cost_summary("osn_not_a_real_token").await, Err(ControlError::AuthFailed)));
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutations_use_writer_snapshots_and_metering() -> TestResult {
+    let Some(fx) = setup("mutations").await? else { return Ok(()); };
+    let p = fx.plane.provision_tenant("mutations", "admin@mutations.test", "s3cret-admin-pass", None, None).await?;
+    let storage = &fx.storage;
+    let namespace = p.tenant.namespace.as_str();
+    for sql in [
+        "CREATE TABLE events (id BIGINT NOT NULL, value BIGINT)",
+        "INSERT INTO events VALUES (1, 10), (2, 20), (3, NULL)",
+        "INSERT INTO events VALUES (4, 40), (5, 50)",
+        "CREATE TABLE incoming (id BIGINT NOT NULL, value BIGINT)",
+        "INSERT INTO incoming VALUES (2, 200), (3, 300), (6, 60)",
+    ] { fx.plane.execute_authenticated(&p.token, sql).await?; }
+    let ident = iceberg::TableIdent::from_strs([namespace, "events"])?;
+    let cases: &[(&str, &[(i64, i64)])] = &[
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.value = i.value WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)", &[(1, 10), (2, 200), (3, 300), (4, 40), (5, 50), (6, 60)]),
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED AND e.value >= 300 THEN DELETE WHEN MATCHED THEN UPDATE SET e.value = i.value", &[(1, 10), (2, 200), (4, 40), (5, 50), (6, 60)]),
+        ("UPDATE events AS e SET value = i.value + 1 FROM incoming AS i WHERE e.id = i.id", &[(1, 10), (2, 201), (4, 40), (5, 50), (6, 61)]),
+        ("UPDATE events SET value = value + 1 WHERE id = 1", &[(1, 11), (2, 201), (4, 40), (5, 50), (6, 61)]),
+        ("DELETE FROM events WHERE id = 5", &[(1, 11), (2, 201), (4, 40), (6, 61)]),
+        ("MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED AND e.id = 2 THEN UPDATE SET e.value = i.value WHEN MATCHED AND e.id = 6 THEN DELETE WHEN NOT MATCHED THEN INSERT (id, value) VALUES (i.id, i.value)", &[(1, 11), (2, 200), (3, 300), (4, 40)]),
+    ];
+    for (sql, expected) in cases {
+        let before = storage.snapshots(&ident).await?;
+        let result = fx.plane.execute_authenticated(&p.token, sql).await?;
+        assert!(result.batches.is_empty());
+        assert_eq!(result.outcome.cost_units_charged, 0);
+        let records = fx.plane.cost_records(&p.token).await?;
+        let record = records.last().unwrap();
+        assert_eq!(record.seq, result.outcome.cost_record_seq);
+        assert_eq!(record.status, opensnow_engine::CostRecordStatus::Completed);
+        assert_eq!(record.rows_returned, 0);
+        assert_eq!(record.bytes_returned, 0);
+        assert_eq!(record.elapsed, result.outcome.elapsed);
+        assert_eq!(storage.snapshots(&ident).await?.len(), before.len() + 1, "{sql}");
+        let rows = fx.plane.execute_authenticated(&p.token, "SELECT id, value FROM events ORDER BY id").await?;
+        let actual: Vec<(i64, i64)> = rows.batches.iter().flat_map(|batch| {
+            let ids = batch.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            let values = batch.column(1).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            (0..batch.num_rows()).map(|i| (ids.value(i), values.value(i))).collect::<Vec<_>>()
+        }).collect();
+        assert_eq!(&actual, expected, "{sql}");
+    }
+    let before = storage.snapshots(&ident).await?;
+    for sql in ["UPDATE events SET value = 0 WHERE id > 100", "DELETE FROM events WHERE id > 100",
+        "MERGE INTO events AS e USING incoming AS i ON false WHEN MATCHED THEN DELETE"] {
+        fx.plane.execute_authenticated(&p.token, sql).await?;
+        assert_eq!(storage.snapshots(&ident).await?, before);
+    }
+    let original = fx.plane.execute_authenticated(&p.token, "SELECT id, value FROM events ORDER BY id").await?.batches;
+    fx.plane.execute_authenticated(&p.token, "INSERT INTO incoming VALUES (2, 201)").await?;
+    let error = fx.plane.execute_authenticated(&p.token, "MERGE INTO events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN UPDATE SET e.value = i.value").await.unwrap_err();
+    assert!(error.to_string().contains("more than once"), "{error}");
+    assert_eq!(storage.snapshots(&ident).await?, before);
+    let records = fx.plane.cost_records(&p.token).await?;
+    assert_eq!(records.last().unwrap().status, opensnow_engine::CostRecordStatus::Failed);
+    assert_eq!(fx.plane.execute_authenticated(&p.token, "SELECT id, value FROM events ORDER BY id").await?.batches, original);
+    let other = fx.plane.provision_tenant("other", "admin@other.test", "s3cret-admin-pass", None, None).await?;
+    for sql in [
+        format!("MERGE INTO {}.events AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE", other.tenant.namespace),
+        format!("MERGE INTO events AS e USING {}.incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE", other.tenant.namespace),
+        format!("UPDATE {}.events SET value = 0", other.tenant.namespace),
+        format!("DELETE FROM {}.events", other.tenant.namespace),
+    ] {
+        assert!(matches!(fx.plane.execute_authenticated(&p.token, &sql).await, Err(ControlError::AccessDenied(_))));
+    }
+    fx.teardown().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutation_checks_cap_before_storage_runs() -> TestResult {
+    let Some(fx) = setup("mutationcap").await? else { return Ok(()); };
+    let p = fx.plane.provision_tenant("mutationcap", "admin@cap.test", "s3cret-admin-pass", Some(0), None).await?;
+    for sql in [
+        "DELETE FROM missing WHERE id = 1",
+        "UPDATE missing SET id = 1",
+        "MERGE INTO missing AS e USING incoming AS i ON e.id = i.id WHEN MATCHED THEN DELETE",
+    ] {
+        assert!(matches!(fx.plane.execute_authenticated(&p.token, sql).await,
+            Err(ControlError::CostCapExceeded)));
+    }
+    assert!(fx.plane.cost_records(&p.token).await?.is_empty());
     fx.teardown().await
 }

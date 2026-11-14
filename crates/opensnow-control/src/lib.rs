@@ -6,7 +6,7 @@ pub mod service;
 pub mod store;
 pub mod types;
 
-pub use service::{guard_sql, namespace_for_tenant, Access, ControlPlane};
+pub use service::{guard_sql, uses_storage_writer, namespace_for_tenant, Access, ControlPlane};
 pub use store::ControlStore;
 pub use opensnow_engine::{CostRecord, CostRecordKind, CostRecordStatus, MeteringRates, TenantCostSummary};
 pub use types::{

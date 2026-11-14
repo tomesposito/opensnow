@@ -93,13 +93,20 @@ namespace is `t` plus the first 16 characters of the tenant id with
 dashes removed. Tables live under `ice.<namespace>.<table>`.
 
 The authenticated execute path checks the token, the tenant status, and
-the scope before the engine runs anything. It then rewrites the SQL:
-every table name after FROM, JOIN, INTO, or TABLE is qualified to the
-caller's own namespace. A name that points at another namespace is
+the scope before execution. The guard walks the parsed statement and
+qualifies every table reference to the caller's own namespace, including
+mutation targets, sources, and nested queries. A name that points at another namespace is
 rejected. Input rules fail closed: exactly one statement, plain
 identifiers only, no comments, and only query, insert, create table,
-drop, delete, and update statements. Listing tables goes through the
+drop, delete, update, and merge statements. Listing tables goes through the
 catalog scoped to the caller's namespace.
+
+After qualification, MERGE, UPDATE, and DELETE run through the storage
+copy-on-write writer. Reads, CREATE TABLE, INSERT, and DROP stay on the
+engine SQL path. Mutations use engine admission and cap checks and leave
+one cost record, including failures after admission. A successful mutation
+returns no batches and charges zero returned-row units. The tenant catalog
+provider is refreshed before the next read so the same session sees the commit.
 
 The isolation test proves the shape. Two tenants each create a table
 named events and load different rows. Each reads back only its own rows.
