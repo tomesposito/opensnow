@@ -381,3 +381,71 @@ async fn mutation_checks_cap_before_storage_runs() -> TestResult {
     assert!(fx.plane.cost_records(&p.token).await?.is_empty());
     fx.teardown().await
 }
+
+/// A fresh ControlPlane over the same Postgres database and the same
+/// warehouse directory. This is a hosted restart: its engine starts
+/// empty, so no tenant is registered in it.
+async fn fresh_plane(fx: &Fixture) -> Result<ControlPlane, Box<dyn std::error::Error + Send + Sync>> {
+    let uri = format!("postgres://postgres@localhost:5433/{}", fx.db);
+    let pool = sqlx::PgPool::connect(&uri).await?;
+    let store = ControlStore::new(pool);
+    store.ensure_schema().await?;
+    let storage = CatalogConfig::postgres("control-test", uri.clone(), fx._temp.path().join("warehouse")).connect().await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+    Ok(ControlPlane::new(store, Arc::new(storage)))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tenants_survive_a_hosted_restart() -> TestResult {
+    let Some(fx) = setup("restart").await? else { return Ok(()); };
+    let a = fx.plane.provision_tenant("tenant-a", "admin@a.test", "pass-a-admin", None, None).await?;
+    let b = fx.plane.provision_tenant("tenant-b", "admin@b.test", "pass-b-admin", None, None).await?;
+    fx.plane.execute_authenticated(&a.token, "CREATE TABLE events (id BIGINT NOT NULL, value BIGINT)").await?;
+    fx.plane.execute_authenticated(&a.token, "INSERT INTO events VALUES (1, 10), (2, 20)").await?;
+    fx.plane.execute_authenticated(&b.token, "CREATE TABLE events (id BIGINT NOT NULL, value BIGINT)").await?;
+    fx.plane.execute_authenticated(&b.token, "INSERT INTO events VALUES (7, 70)").await?;
+    let c = fx.plane.provision_tenant("tenant-c", "admin@c.test", "pass-c-admin", None, None).await?;
+    fx.plane.suspend_tenant(&c.tenant.id).await?;
+    // The pre-restart cost records are durable in Postgres.
+    assert_eq!(fx.plane.store().list_cost_records(&a.tenant.id).await?.len(), 2);
+
+    // Restart: a fresh plane over the same store and warehouse.
+    let plane2 = fresh_plane(&fx).await?;
+    assert!(!plane2.is_registered(&a.tenant.id).await);
+    assert!(!plane2.is_registered(&b.tenant.id).await);
+
+    // The original token runs SQL with no re-provisioning, and the
+    // row written before the restart reads back.
+    let selected = plane2.execute_authenticated(&a.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&selected.batches), BTreeSet::from([1, 2]));
+    assert!(plane2.is_registered(&a.tenant.id).await);
+
+    // Writes work after the restart, including a storage-writer
+    // mutation, which produces exactly one cost record: its sequence
+    // advances by one from the insert before it.
+    let inserted = plane2.execute_authenticated(&a.token, "INSERT INTO events VALUES (3, 30)").await?;
+    let updated = plane2.execute_authenticated(&a.token, "UPDATE events SET value = value + 1 WHERE id = 1").await?;
+    assert_eq!(updated.outcome.cost_record_seq, inserted.outcome.cost_record_seq + 1);
+    let rows = plane2.execute_authenticated(&a.token, "SELECT id, value FROM events ORDER BY id").await?;
+    let actual: Vec<(i64, i64)> = rows.batches.iter().flat_map(|batch| {
+        let ids_col = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let values = batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        (0..batch.num_rows()).map(|i| (ids_col.value(i), values.value(i))).collect::<Vec<_>>()
+    }).collect();
+    assert_eq!(actual, vec![(1, 11), (2, 20), (3, 30)]);
+
+    // The second pre-restart tenant also self-heals, and isolation
+    // holds: it sees only its own rows.
+    let b_rows = plane2.execute_authenticated(&b.token, "SELECT id FROM events").await?;
+    assert_eq!(ids(&b_rows.batches), BTreeSet::from([7]));
+    assert!(plane2.is_registered(&b.tenant.id).await);
+
+    // Cost records written before the restart still read back.
+    assert!(plane2.cost_records(&a.token).await?.len() >= 2);
+
+    // A tenant suspended before the restart stays dead after it and
+    // is never lazily registered.
+    assert!(matches!(plane2.execute_authenticated(&c.token, "SELECT id FROM events").await, Err(ControlError::AuthFailed)));
+    assert!(!plane2.is_registered(&c.tenant.id).await);
+    fx.teardown().await
+}

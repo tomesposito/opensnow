@@ -79,6 +79,11 @@ caller cannot tell which check failed or whether a login exists.
 - Delete: the tenant record is marked deleted, all of its tokens are
   revoked in the same transaction, and the tenant is unregistered from
   the engine. Other tenants are unaffected.
+- Restart: the engine starts empty when the hosted process restarts.
+  An active tenant is registered again on its first query after the
+  restart, with the cost cap from its tenant record, so its tokens
+  work with no re-provisioning. Suspended and deleted tenants are not
+  registered again.
 
 Delete does not erase storage. The tenant row stays as a deleted
 tombstone, so a deleted tenant's name stays taken. Its namespace, tables,
@@ -149,10 +154,11 @@ and cost_summary read them back per tenant. See docs/METERING.md.
 
 ## Tests
 
-The control crate has 3 unit tests for credentials and 8 integration
+The control crate has 3 unit tests for credentials and 13 integration
 tests against throwaway Postgres databases on localhost:5433:
 provisioning under five seconds, token and password auth outcomes,
 tenant isolation, suspend and unsuspend, delete, cost cap enforcement,
-duplicate rejection, and metering records read back in dollars per
-tenant. The stored-token assertion checks that the
+duplicate rejection, metering records read back in dollars per
+tenant, mutations through the storage writer, and tenant survival of
+a hosted restart. The stored-token assertion checks that the
 database holds a hash, not the returned plaintext.
