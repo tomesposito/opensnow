@@ -423,6 +423,12 @@ impl ControlPlane {
             Access::Write => principal.has_scope(TokenScope::Write),
         };
         if !allowed { return Err(ControlError::AccessDenied("token scope does not allow this statement".into())); }
+        // A hosted restart starts with an empty engine, so an active
+        // tenant may not be registered yet. Register it on first use.
+        // This is idempotent, and it locks the engine itself, so it
+        // runs before the lock below. Suspended and deleted tenants
+        // never reach this point: the status check above stops them.
+        self.register_engine_tenant(&tenant).await?;
         let engine = self.engine.lock().await;
         let result = if uses_storage_writer(&rewritten)? {
             engine.execute_mutation(&principal.tenant_id, &rewritten, async {
