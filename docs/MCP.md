@@ -122,8 +122,10 @@ encoding, so a result reads the same on either path.
   read and write tool split, token scope, namespace isolation, and the
   cost cap. An agent host can still prompt before calling
   execute_write; that is the host's setting, not this server's claim.
-- No TLS in this listener. A hosted deploy terminates TLS in front of
-  it. This slice is local builds only and deploys nothing.
+- No TLS in this listener. The shipped Caddy reverse proxy terminates
+  TLS in front of a loopback-only listener. See deploy/Caddyfile and
+  docs/DEPLOYMENT.md for packaging, HTTPS checks, and the AWS runbook.
+  This slice builds locally and deploys nothing.
 - docs_search covers only the docs shipped in this repo. It is a
   grounding aid, not a web search.
 - Describe reads the table schema from the catalog in the caller's

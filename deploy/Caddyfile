@@ -1,0 +1,21 @@
+{
+	# Only 443 is public. ACME uses TLS-ALPN-01, without an HTTP port.
+	auto_https disable_redirects
+	email {$OPENSNOW_TLS_EMAIL}
+}
+
+{$OPENSNOW_DOMAIN} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		# The listener supports Content-Length, not chunked request bodies.
+		# Buffering preserves JSON bytes and supplies a length upstream.
+		request_buffers 1MB
+		transport http {
+			versions 1.1
+		}
+	}
+}
