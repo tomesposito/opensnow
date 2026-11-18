@@ -542,7 +542,7 @@ impl StorageCatalog {
     /// path: the new row set is computed with SELECTs over the catalog
     /// and committed by replace_all as exactly one overwrite snapshot.
     /// A merge or update that applies to no row creates no snapshot.
-    async fn execute_joined(&self, plan: JoinedPlan) -> Result<Vec<RecordBatch>> {
+    async fn execute_joined(&self, plan: JoinedPlan) -> Result<u64> {
         let table = self.catalog.load_table(&plan.ident).await?;
         let schema = schema(&table)?;
         let fields: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
@@ -596,7 +596,7 @@ impl StorageCatalog {
                  WHERE {ta}.__os_tgt IS NULL AND ({insert_any})", plan.on)).await?)?
         };
         if applied == 0 && insert_count == 0 {
-            return Ok(vec![]);
+            return Ok(0);
         }
         let mut projections = Vec::new();
         for field in schema.fields() {
@@ -652,16 +652,31 @@ impl StorageCatalog {
         }
         let batches = coerce_to_schema(&schema, batches)?;
         self.replace_all(&plan.ident, batches).await?;
-        Ok(vec![])
+        Ok((applied + insert_count) as u64)
     }
 
     /// Runs narrow DELETE/UPDATE statements through per-file copy-on-write.
     /// Other statements retain `sql` behavior. Mutations return no result batches.
     pub async fn execute(&self, sql: &str) -> Result<Vec<RecordBatch>> {
         if let Some(plan) = joined_plan(sql)? {
-            return self.execute_joined(plan).await;
+            self.execute_joined(plan).await?;
+            return Ok(Vec::new());
         }
         let Some(mutation) = Mutation::parse(sql)? else { return self.sql(sql).await; };
+        self.execute_mutation(mutation).await?;
+        Ok(Vec::new())
+    }
+
+    /// Returns the number of rows affected by a guarded storage mutation.
+    pub async fn execute_counted_mutation(&self, sql: &str) -> Result<u64> {
+        if let Some(plan) = joined_plan(sql)? {
+            return self.execute_joined(plan).await;
+        }
+        let mutation = Mutation::parse(sql)?.ok_or("expected a storage mutation")?;
+        self.execute_mutation(mutation).await
+    }
+
+    async fn execute_mutation(&self, mutation: Mutation) -> Result<u64> {
         let table = self.catalog.load_table(&mutation.ident).await?;
         let schema = schema(&table)?;
         let empty = frame(schema.clone(), vec![RecordBatch::new_empty(schema.clone())])?;
@@ -692,13 +707,15 @@ impl StorageCatalog {
             if !task.deletes().is_empty() { return Err("delete files are not supported".into()); }
             by_file.entry(task.data_file_path().to_owned()).or_default().push(task);
         }
+        let mut affected = 0;
         let mut removed = Vec::new();
         let mut added = Vec::new();
         for (path, tasks) in by_file {
             let batches = read_file(&table, tasks).await?;
             let file_frame = frame(schema.clone(), normalize(&schema, batches)?)?;
-            let matches = file_frame.clone().filter(predicate.clone())?.limit(0, Some(1))?.collect().await?;
-            if matches.iter().all(|batch| batch.num_rows() == 0) { continue; }
+            let matches = file_frame.clone().filter(predicate.clone())?.count().await?;
+            if matches == 0 { continue; }
+            affected += matches as u64;
             let replacement = if let Some(projection) = &projection {
                 file_frame.select(projection.clone())?
             } else {
@@ -709,7 +726,7 @@ impl StorageCatalog {
             removed.push(files.remove(&path).ok_or("planned file missing from current manifest")?);
         }
         if !removed.is_empty() { self.commit_overwrite(&table, removed, added).await?; }
-        Ok(vec![])
+        Ok(affected)
     }
 
     /// Replaces the complete current row set in one overwrite snapshot, including

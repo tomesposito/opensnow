@@ -74,3 +74,17 @@ Status: DECIDED (Tom, Nov 5, 2026): approved as recommended.
 ## D-01 sub-study: DuckLake vs the Iceberg default
 
 Queued Nov 5, 2026 under the D-01 ruling. The technical research (docs/research/02) calls DuckLake a core candidate for Archetype A: metadata in Postgres, Parquet in object storage, commit as one SQL transaction, the closest live experiment to Snowflake's metadata-in-a-database design. The design defaults to Iceberg (portable, engine-neutral, the exit ramp to Archetype B). Evaluate DuckLake against that default during the Phase 0 storage spike on: multi-engine access, time travel and clone semantics, compaction story, and exit cost if opensnow later moves to Archetype B. Finding goes to Tom as an amendment to D-01, not a silent swap.
+
+## D-07: BI connectivity protocol
+
+Context: OpenSight and other BI tools need stock driver access to the
+opensnow warehouse.
+
+Recommendation: implement PostgreSQL wire protocol v3 in opensnow-mcp.
+HTTP would require a connector for each tool. Snowflake wire compatibility
+has a larger surface to implement and verify. Negotiate TLS with rustls
+using a configured certificate and key. Route warehouse SQL through the
+authenticated control plane. Transaction blocks track protocol state.
+Each warehouse statement executes independently.
+
+Status: DECIDED by issue #39.

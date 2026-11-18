@@ -430,9 +430,21 @@ impl ControlPlane {
     ) -> Result<QueryResult> {
         *receipt = None;
         let principal = self.authenticate_token(plaintext_token).await?;
+        self.execute_for_principal(&principal, sql, receipt).await
+    }
+
+    async fn active_tenant(&self, principal: &Principal) -> Result<TenantRecord> {
         let tenant = self.store.get_tenant_by_id(&principal.tenant_id).await.map_err(|_| ControlError::AuthFailed)?
             .ok_or(ControlError::AuthFailed)?;
         if tenant.status != TenantStatus::Active || tenant.namespace != principal.namespace { return Err(ControlError::AuthFailed); }
+        Ok(tenant)
+    }
+
+    pub async fn execute_for_principal(
+        &self, principal: &Principal, sql: &str, receipt: &mut Option<CostRecord>,
+    ) -> Result<QueryResult> {
+        *receipt = None;
+        let tenant = self.active_tenant(principal).await?;
         let (rewritten, access) = guard_sql(&principal.namespace, sql)?;
         let allowed = match access {
             Access::Read => principal.has_scope(TokenScope::Read) || principal.has_scope(TokenScope::Write),
@@ -447,13 +459,18 @@ impl ControlPlane {
         self.register_engine_tenant(&tenant).await?;
         let engine = self.engine.lock().await;
         let result = if uses_storage_writer(&rewritten)? {
-            engine.execute_mutation_with_record(&principal.tenant_id, &rewritten, async {
+            let mut affected = 0;
+            let result = engine.execute_mutation_with_record(&principal.tenant_id, &rewritten, async {
                 self.storage.refresh().await?;
                 let provider = IcebergCatalogProvider::try_new(self.storage.catalog.clone()).await?;
-                self.storage.execute(&rewritten).await?;
+                affected = self.storage.execute_counted_mutation(&rewritten).await?;
                 engine.context(&principal.tenant_id)?.register_catalog("ice", Arc::new(provider));
                 Ok(())
-            }, receipt).await
+            }, receipt).await;
+            result.map(|mut result| {
+                result.rows_affected = Some(affected);
+                result
+            })
         } else {
             engine.execute_with_record(&principal.tenant_id, &rewritten, receipt).await
         };
@@ -515,6 +532,11 @@ impl ControlPlane {
     /// to the principal's own namespace, so no other tenant's tables list.
     pub async fn list_tables(&self, plaintext_token: &str) -> Result<Vec<String>> {
         let principal = self.authenticate_token(plaintext_token).await?;
+        self.list_tables_for_principal(&principal).await
+    }
+
+    pub async fn list_tables_for_principal(&self, principal: &Principal) -> Result<Vec<String>> {
+        self.active_tenant(principal).await?;
         let namespace = NamespaceIdent::new(principal.namespace.clone());
         let idents = self.storage.catalog.list_tables(&namespace).await
             .map_err(|e| ControlError::Storage(e.into()))?;
@@ -527,13 +549,23 @@ impl ControlPlane {
     /// the catalog schema in the caller's own namespace.
     pub async fn describe_table(&self, plaintext_token: &str, table: &str) -> Result<Vec<crate::types::TableColumn>> {
         let principal = self.authenticate_token(plaintext_token).await?;
+        self.describe_table_for_principal(&principal, table).await
+    }
+
+    pub async fn describe_table_for_principal(&self, principal: &Principal, table: &str) -> Result<Vec<crate::types::TableColumn>> {
+        Ok(self.describe_table_fields(principal, table).await?.into_iter().map(|(column, _)| column).collect())
+    }
+
+    /// Catalog columns paired with their Iceberg required flag.
+    pub async fn describe_table_fields(&self, principal: &Principal, table: &str) -> Result<Vec<(crate::types::TableColumn, bool)>> {
+        self.active_tenant(principal).await?;
         if !valid_ident(table) { return Err(ControlError::InvalidInput("bad table name".into())); }
         let ident = TableIdent::new(NamespaceIdent::new(principal.namespace.clone()), table.into());
         let loaded = self.storage.catalog.load_table(&ident).await.map_err(|_| ControlError::NotFound)?;
         let schema = loaded.metadata().current_schema();
-        Ok(schema.as_struct().fields().iter().map(|f| crate::types::TableColumn {
+        Ok(schema.as_struct().fields().iter().map(|f| (crate::types::TableColumn {
             name: f.name.clone(), data_type: Self::iceberg_type_name(&f.field_type),
-        }).collect())
+        }, f.required)).collect())
     }
 
     pub async fn suspend_tenant(&self, tenant_id: &str) -> Result<TenantRecord> {

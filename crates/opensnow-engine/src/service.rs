@@ -123,6 +123,8 @@ pub struct QueryOutcome {
 #[derive(Debug)]
 pub struct QueryResult {
     pub batches: Vec<RecordBatch>,
+    pub schema: Option<datafusion::arrow::datatypes::SchemaRef>,
+    pub rows_affected: Option<u64>,
     pub outcome: QueryOutcome,
 }
 /// In-process SQL endpoint. Transport and authentication belong to later slices.
@@ -251,6 +253,8 @@ impl EngineService {
         result.map_err(|e| EngineError::Execution(DataFusionError::External(e)))?;
         Ok(QueryResult {
             batches: Vec::new(),
+            schema: None,
+            rows_affected: None,
             outcome: QueryOutcome {
                 rows_returned: 0, cost_units_charged: 0, elapsed,
                 cost_record_seq: record.seq, bytes_returned: 0,
@@ -274,6 +278,7 @@ impl EngineService {
         let _guard = self.acquire(name).await?;
         let tenant = self.tenant(name)?.clone();
         let mut batches = Vec::new();
+        let mut schema = None;
         let mut cost = 0u64;
         let mut rows = 0usize;
         let mut meter_rows = 0u64;
@@ -284,6 +289,7 @@ impl EngineService {
             Ok(df) => match df.execute_stream().await {
                 Err(e) => failure = Some(e.into()),
                 Ok(mut stream) => {
+                    schema = Some(stream.schema());
                     while let Some(item) = stream.next().await {
                         match item {
                             Err(e) => { failure = Some(e.into()); break; }
@@ -325,6 +331,8 @@ impl EngineService {
             Some(e) => Err(e),
             None => Ok(QueryResult {
                 batches,
+                schema,
+                rows_affected: None,
                 outcome: QueryOutcome {
                     rows_returned: rows,
                     cost_units_charged: cost,

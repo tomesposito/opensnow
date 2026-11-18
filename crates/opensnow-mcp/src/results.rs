@@ -3,7 +3,6 @@
 //! Values are display strings, not typed JSON. Both local and hosted
 //! paths use this one encoding, so a result reads the same either way.
 
-use arrow::array::Array;
 use arrow::compute::cast_with_options;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
@@ -15,32 +14,49 @@ pub fn batches_to_json(batches: &[RecordBatch]) -> serde_json::Value {
     if let Some(first) = batches.first() {
         let schema = first.schema();
         for field in schema.fields() {
-            columns.push(serde_json::json!({"name": field.name(), "type": field.data_type().to_string()}));
+            columns.push(
+                serde_json::json!({"name": field.name(), "type": field.data_type().to_string()}),
+            );
         }
     }
     for batch in batches {
-        let casted: Vec<_> = batch.columns().iter().map(|column| {
+        rows.extend(display_rows(batch).map(|row| serde_json::json!(row)));
+    }
+    serde_json::json!({"columns": columns, "rows": rows, "row_count": rows.len()})
+}
+
+pub(crate) fn display_rows(batch: &RecordBatch) -> impl Iterator<Item = Vec<Option<String>>> + '_ {
+    let casted: Vec<_> = batch
+        .columns()
+        .iter()
+        .map(|column| {
             if column.data_type() == &DataType::Utf8 {
                 None
             } else {
                 cast_with_options(column, &DataType::Utf8, &Default::default()).ok()
             }
-        }).collect();
-        for row in 0..batch.num_rows() {
-            let mut values = Vec::new();
-            for (index, column) in batch.columns().iter().enumerate() {
-                if column.is_null(row) {
-                    values.push(serde_json::Value::Null);
-                    continue;
+        })
+        .collect();
+    let nulls: Vec<_> = batch
+        .columns()
+        .iter()
+        .map(|column| column.logical_nulls())
+        .collect();
+    (0..batch.num_rows()).map(move |row| {
+        batch
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                if nulls[index]
+                    .as_ref()
+                    .is_some_and(|nulls| nulls.is_null(row))
+                {
+                    return None;
                 }
-                let text = match &casted[index] {
-                    Some(array) => array_value_to_string(array, row).unwrap_or_else(|_| "null".into()),
-                    None => array_value_to_string(column, row).unwrap_or_else(|_| "null".into()),
-                };
-                values.push(serde_json::Value::String(text));
-            }
-            rows.push(serde_json::Value::Array(values));
-        }
-    }
-    serde_json::json!({"columns": columns, "rows": rows, "row_count": rows.len()})
+                let array = casted[index].as_ref().unwrap_or(column);
+                Some(array_value_to_string(array, row).unwrap_or_else(|_| "null".into()))
+            })
+            .collect()
+    })
 }

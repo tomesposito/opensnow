@@ -33,6 +33,10 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 opensnow-mcp = { path = "crates/opensnow-mcp" }
 
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "=2.2.0"
+
 [profile.dev]
 debug = 0
 

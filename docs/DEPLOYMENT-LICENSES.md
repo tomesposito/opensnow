@@ -1,6 +1,7 @@
 # Deployment D-04 license check
 
-Checked 2026-11-16. No Rust dependency or lockfile change. The core
+Deployment checked 2026-11-16. The locked Rust audit also covers
+the PostgreSQL wire TLS dependencies added for issue #39. The core
 remains Apache-2.0. Existing pins and the vendored Iceberg Apache-2.0
 patch are described in [PINNED-STACK.md](PINNED-STACK.md).
 
