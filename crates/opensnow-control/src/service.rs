@@ -191,9 +191,10 @@ impl ControlPlane {
     async fn register_engine_tenant(&self, tenant: &TenantRecord) -> Result<()> {
         let mut engine = self.engine.lock().await;
         if engine.is_registered(&tenant.id) { return Ok(()); }
-        engine.register_tenant(tenant.id.clone(), ResourceGroup {
+        let last_seq = self.store.max_cost_seq(&tenant.id).await?;
+        engine.register_tenant_with_cost_sequence(tenant.id.clone(), ResourceGroup {
             cost_cap_units: tenant.cost_cap_units, ..ResourceGroup::default()
-        })?;
+        }, last_seq)?;
         let provider = IcebergCatalogProvider::try_new(self.storage.catalog.clone()).await
             .map_err(|e| ControlError::Storage(e.into()))?;
         engine.context(&tenant.id)
@@ -382,20 +383,28 @@ impl ControlPlane {
     pub async fn save_worksheet(
         &self, plaintext_token: &str, id: Option<&str>, name: &str, sql_text: &str,
     ) -> Result<WorksheetRecord> {
+        self.save_worksheet_with_chart(plaintext_token, id, name, sql_text, None).await
+    }
+
+    pub async fn save_worksheet_with_chart(
+        &self, plaintext_token: &str, id: Option<&str>, name: &str, sql_text: &str,
+        chart: Option<Option<serde_json::Value>>,
+    ) -> Result<WorksheetRecord> {
         let principal = self.authenticate_token(plaintext_token).await?;
+        if let Some(Some(spec)) = &chart {
+            crate::analytics::validate_chart(spec)?;
+        }
         let name = name.trim();
         if name.is_empty() { return Err(ControlError::InvalidInput("worksheet name is required".into())); }
         match id {
-            Some(id) => {
-                self.store.update_worksheet(&principal.tenant_id, &principal.user_id, id, name, sql_text).await?;
-                self.store.get_worksheet(&principal.tenant_id, &principal.user_id, id).await?
-                    .ok_or(ControlError::NotFound)
-            }
+            Some(id) => self.store.update_worksheet_data(
+                &principal.tenant_id, &principal.user_id, id, name, sql_text, chart,
+            ).await,
             None => {
                 let record = WorksheetRecord {
                     id: uuid::Uuid::now_v7().to_string(),
                     tenant_id: principal.tenant_id.clone(), user_id: principal.user_id.clone(),
-                    name: name.to_string(), sql_text: sql_text.to_string(),
+                    name: name.to_string(), sql_text: sql_text.to_string(), chart_spec: chart.flatten(),
                     created_at: String::new(), updated_at: String::new(),
                 };
                 self.store.insert_worksheet(&record).await?;
@@ -413,6 +422,13 @@ impl ControlPlane {
     /// Auth, status, scope, namespace, and cost cap checks all happen before
     /// SQL execution. Write scope implies read.
     pub async fn execute_authenticated(&self, plaintext_token: &str, sql: &str) -> Result<QueryResult> {
+        self.execute_authenticated_with_record(plaintext_token, sql, &mut None).await
+    }
+
+    pub async fn execute_authenticated_with_record(
+        &self, plaintext_token: &str, sql: &str, receipt: &mut Option<CostRecord>,
+    ) -> Result<QueryResult> {
+        *receipt = None;
         let principal = self.authenticate_token(plaintext_token).await?;
         let tenant = self.store.get_tenant_by_id(&principal.tenant_id).await.map_err(|_| ControlError::AuthFailed)?
             .ok_or(ControlError::AuthFailed)?;
@@ -431,21 +447,20 @@ impl ControlPlane {
         self.register_engine_tenant(&tenant).await?;
         let engine = self.engine.lock().await;
         let result = if uses_storage_writer(&rewritten)? {
-            engine.execute_mutation(&principal.tenant_id, &rewritten, async {
+            engine.execute_mutation_with_record(&principal.tenant_id, &rewritten, async {
                 self.storage.refresh().await?;
                 let provider = IcebergCatalogProvider::try_new(self.storage.catalog.clone()).await?;
                 self.storage.execute(&rewritten).await?;
                 engine.context(&principal.tenant_id)?.register_catalog("ice", Arc::new(provider));
                 Ok(())
-            }).await
+            }, receipt).await
         } else {
-            engine.execute(&principal.tenant_id, &rewritten).await
+            engine.execute_with_record(&principal.tenant_id, &rewritten, receipt).await
         };
         // Metering records sync to Postgres on both paths: a failed or
         // cap-aborted query executed and left a record too. On the error
         // path the original engine error wins over a sync failure.
         let records = engine.cost_records(&principal.tenant_id).unwrap_or_default();
-        drop(engine);
         match result {
             Ok(query_result) => {
                 self.sync_cost_records(&principal.tenant_id, &records).await?;

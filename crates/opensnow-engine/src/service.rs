@@ -72,6 +72,7 @@ struct Tenant {
     running: Arc<Semaphore>,
     charged: Mutex<u64>,
     records: Mutex<Vec<CostRecord>>,
+    cost_sequence_start: u64,
     rates: MeteringRates,
 }
 impl Tenant {
@@ -94,7 +95,7 @@ impl Tenant {
         let mut records = self.records.lock().unwrap();
         let record = CostRecord {
             tenant: tenant.to_string(),
-            seq: records.len() as u64 + 1,
+            seq: self.cost_sequence_start + records.len() as u64 + 1,
             kind, status, sql, service, started_at_unix_ms, elapsed,
             rows_returned, bytes_returned, vcpu_seconds,
             cost_dollars: self.rates.cost_dollars(vcpu_seconds),
@@ -143,6 +144,15 @@ impl EngineService {
         name: impl Into<String>,
         group: ResourceGroup,
     ) -> Result<(), EngineError> {
+        self.register_tenant_with_cost_sequence(name, group, 0)
+    }
+
+    pub fn register_tenant_with_cost_sequence(
+        &mut self,
+        name: impl Into<String>,
+        group: ResourceGroup,
+        last_seq: u64,
+    ) -> Result<(), EngineError> {
         let name = name.into();
         if self.tenants.contains_key(&name) {
             return Err(EngineError::TenantAlreadyRegistered);
@@ -160,6 +170,7 @@ impl EngineService {
             running: Arc::new(Semaphore::new(group.max_concurrent)),
             charged: Mutex::new(0),
             records: Mutex::new(Vec::new()),
+            cost_sequence_start: last_seq,
             rates: self.rates,
             group,
         }));
@@ -219,6 +230,14 @@ impl EngineService {
     /// as a query returning no batches. The future is polled only after admission.
     pub async fn execute_mutation<F>(&self, name: &str, sql: &str, mutation: F) -> Result<QueryResult, EngineError>
     where F: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        self.execute_mutation_with_record(name, sql, mutation, &mut None).await
+    }
+
+    pub async fn execute_mutation_with_record<F>(
+        &self, name: &str, sql: &str, mutation: F, receipt: &mut Option<CostRecord>,
+    ) -> Result<QueryResult, EngineError>
+    where F: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        *receipt = None;
         let start = Instant::now();
         let started_at_unix_ms = unix_now_ms();
         let _guard = self.acquire(name).await?;
@@ -228,6 +247,7 @@ impl EngineService {
         let status = if result.is_ok() { CostRecordStatus::Completed } else { CostRecordStatus::Failed };
         let record = tenant.record(name, CostRecordKind::Query, status, Some(sql.to_string()), None,
             started_at_unix_ms, elapsed, 0, 0);
+        *receipt = Some(record.clone());
         result.map_err(|e| EngineError::Execution(DataFusionError::External(e)))?;
         Ok(QueryResult {
             batches: Vec::new(),
@@ -239,6 +259,13 @@ impl EngineService {
         })
     }
     pub async fn execute(&self, name: &str, sql: &str) -> Result<QueryResult, EngineError> {
+        self.execute_with_record(name, sql, &mut None).await
+    }
+
+    pub async fn execute_with_record(
+        &self, name: &str, sql: &str, receipt: &mut Option<CostRecord>,
+    ) -> Result<QueryResult, EngineError> {
+        *receipt = None;
         let start = Instant::now();
         let started_at_unix_ms = unix_now_ms();
         // Rejections here (unknown tenant, admission denied, cap already
@@ -293,6 +320,7 @@ impl EngineService {
             name, CostRecordKind::Query, status, Some(sql.to_string()), None,
             started_at_unix_ms, elapsed, meter_rows, meter_bytes,
         );
+        *receipt = Some(record.clone());
         match failure {
             Some(e) => Err(e),
             None => Ok(QueryResult {

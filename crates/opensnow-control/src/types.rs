@@ -43,6 +43,7 @@ pub struct TableColumn { pub name: String, pub data_type: String }
 pub struct WorksheetRecord {
     pub id: String, pub tenant_id: String, pub user_id: String,
     pub name: String, pub sql_text: String,
+    pub chart_spec: Option<serde_json::Value>,
     pub created_at: String, pub updated_at: String,
 }
 #[derive(Clone, Debug)]

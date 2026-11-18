@@ -35,11 +35,13 @@ const DOCS: &[(&str, &str)] = &[
     ("CONTROL-PLANE.md", include_str!("../../../docs/CONTROL-PLANE.md")),
     ("METERING.md", include_str!("../../../docs/METERING.md")),
     ("MCP.md", include_str!("../../../docs/MCP.md")),
+    ("ANALYTICS.md", include_str!("../../../docs/ANALYTICS.md")),
     ("WORKSHEETS-UI.md", include_str!("../../../docs/WORKSHEETS-UI.md")),
     ("SOLUTION_DESIGN.md", include_str!("../../../SOLUTION_DESIGN.md")),
 ];
 
 fn tool_defs() -> Value {
+    let worksheet = json!({"type": "object", "properties": {"worksheet_id": {"type": "string"}}, "required": ["worksheet_id"]});
     let sql = json!({"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]});
     let table = json!({"type": "object", "properties": {"table": {"type": "string"}}, "required": ["table"]});
     json!([
@@ -50,6 +52,10 @@ fn tool_defs() -> Value {
         {"name": "sample_rows", "description": "Read up to limit sample rows from one table (default 10, max 100).", "inputSchema": {"type": "object", "properties": {"table": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["table"]}},
         {"name": "query", "description": "Run one read-only SQL statement. Write statements are refused; use execute_write.", "inputSchema": sql},
         {"name": "execute_write", "description": "Run one write statement (create, insert, update, delete, merge, drop). Hosted: needs a write-scope token.", "inputSchema": sql},
+        {"name": "get_chart_spec", "description": "Read a worksheet's Vega-Lite v5 chart.", "inputSchema": worksheet},
+        {"name": "set_chart_spec", "description": "Set a worksheet's Vega-Lite v5 chart or clear it with null. Hosted: requires write scope.", "inputSchema": {"type": "object", "properties": {"worksheet_id": {"type": "string"}, "chart_spec": {"type": ["object", "null"]}}, "required": ["worksheet_id", "chart_spec"]}},
+        {"name": "list_dashboards", "description": "List the caller's dashboards.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "get_dashboard", "description": "Read one dashboard with its ordered tiles and latest results.", "inputSchema": {"type": "object", "properties": {"dashboard_id": {"type": "string"}}, "required": ["dashboard_id"]}},
         {"name": "cost_records", "description": "The caller's query log: every executed query with its cost in dollars.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "cost_summary", "description": "The caller's cost totals across all recorded queries.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "docs_search", "description": "Search the shipped opensnow docs and return matching lines.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
@@ -180,6 +186,41 @@ impl McpServer {
             }
             "query" => self.execute(auth, args["sql"].as_str().ok_or("sql is required")?, Access::Read).await,
             "execute_write" => self.execute(auth, args["sql"].as_str().ok_or("sql is required")?, Access::Write).await,
+            "get_chart_spec" => {
+                let id = args["worksheet_id"].as_str().ok_or("worksheet_id is required")?;
+                let spec = match &self.mode {
+                    Mode::Local(db) => db.chart_spec(id).await?,
+                    Mode::Hosted(plane) => plane.worksheet(self.require_token(auth)?.unwrap(), id).await?.chart_spec,
+                };
+                Ok(json!({"worksheet_id": id, "chart_spec": spec}))
+            }
+            "set_chart_spec" => {
+                let id = args["worksheet_id"].as_str().ok_or("worksheet_id is required")?;
+                let spec = args.get("chart_spec").ok_or("chart_spec is required")?;
+                let spec = (!spec.is_null()).then(|| spec.clone());
+                match &self.mode {
+                    Mode::Local(db) => db.set_chart_spec(id, spec.clone()).await?,
+                    Mode::Hosted(plane) => plane.set_chart_spec(self.require_token(auth)?.unwrap(), id, spec.clone(), true).await?,
+                }
+                Ok(json!({"worksheet_id": id, "chart_spec": spec}))
+            }
+            "list_dashboards" => {
+                let dashboards = match &self.mode {
+                    Mode::Local(db) => db.dashboards(None).await?,
+                    Mode::Hosted(plane) => plane.list_dashboards(self.require_token(auth)?.unwrap()).await?,
+                };
+                Ok(json!({"dashboards": dashboards}))
+            }
+            "get_dashboard" => {
+                let id = args["dashboard_id"].as_str().ok_or("dashboard_id is required")?;
+                match &self.mode {
+                    Mode::Local(db) => db.dashboard(id).await,
+                    Mode::Hosted(plane) => {
+                        let (dashboard, tiles) = plane.dashboard(self.require_token(auth)?.unwrap(), id).await?;
+                        Ok(crate::analytics::dashboard_json(dashboard, tiles))
+                    }
+                }
+            }
             "cost_records" => {
                 let records = match &self.mode {
                     Mode::Local(db) => db.cost_records().await?,

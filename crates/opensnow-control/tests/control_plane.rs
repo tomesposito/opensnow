@@ -418,6 +418,7 @@ async fn tenants_survive_a_hosted_restart() -> TestResult {
     // row written before the restart reads back.
     let selected = plane2.execute_authenticated(&a.token, "SELECT id FROM events").await?;
     assert_eq!(ids(&selected.batches), BTreeSet::from([1, 2]));
+    assert_eq!(selected.outcome.cost_record_seq, 3);
     assert!(plane2.is_registered(&a.tenant.id).await);
 
     // Writes work after the restart, including a storage-writer
@@ -441,7 +442,7 @@ async fn tenants_survive_a_hosted_restart() -> TestResult {
     assert!(plane2.is_registered(&b.tenant.id).await);
 
     // Cost records written before the restart still read back.
-    assert!(plane2.cost_records(&a.token).await?.len() >= 2);
+    assert_eq!(plane2.cost_records(&a.token).await?.len(), 6);
 
     // A tenant suspended before the restart stays dead after it and
     // is never lazily registered.

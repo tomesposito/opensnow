@@ -1,6 +1,7 @@
 //! opensnow control plane: tenants, users, tokens, and authenticated
 //! execution. See docs/CONTROL-PLANE.md and the issue #9 brief.
 
+pub mod analytics;
 pub mod credentials;
 pub mod service;
 pub mod store;

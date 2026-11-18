@@ -37,9 +37,9 @@ The browser holds the caller's token in sessionStorage only.
    button that loads the SQL into a worksheet. Only the caller's own
    tenant records are ever returned.
 10. Suspended or deleted tenant. Any 401 after sign-in clears the
-    token and returns to the sign-in screen with the same opaque
-    failure message as state 1. No catalog, history, or cost data is
-    shown.
+    token and shows the session-ended screen. **Sign in** returns to
+    the sign-in form. The server uses the same opaque 401 body for all
+    authentication failures.
 
 ## Backend additions in this slice
 
@@ -69,8 +69,8 @@ New HTTP routes, all on the existing transport:
 
 ## Limits
 
-- No charts (Q6). The Analyse step of the experience sequence is a
-  later slice. The grid plus the cost line is the v1 worksheet.
+- Add a chart to a worksheet result or pin it to a dashboard. See
+  [Analytics](ANALYTICS.md) for chart types and refresh behavior.
 - Password sign-in is read scope. Worksheets run read queries on a
   password session. Write statements need a write-scope token, which
   the UI accepts on the token sign-in form and the control plane

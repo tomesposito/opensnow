@@ -26,6 +26,8 @@ RUN set -eu; mkdir -p /runtime/usr/local/bin /runtime/warehouse /runtime/tmp /ru
     mkdir -p /runtime/usr/share/doc/opensnow; \
     cp deploy/dependency-licenses.tsv /runtime/usr/share/doc/opensnow/; \
     cp vendor/iceberg-0.11.0/LICENSE vendor/iceberg-0.11.0/NOTICE /runtime/usr/share/doc/opensnow/; \
+    mkdir -p /runtime/usr/share/doc/opensnow/vega; \
+    cp -r vendor/vega/*.LICENSE vendor/vega/dependency-licenses.tsv vendor/vega/third-party /runtime/usr/share/doc/opensnow/vega/; \
     mkdir -p /runtime/usr/share/doc/opensnow/third-party-licenses; \
     find "$CARGO_HOME/registry/src" -type f \( -iname 'license*' -o -iname 'notice*' -o -iname 'copying*' -o -iname 'unlicense*' \) \
       -exec cp --parents '{}' /runtime/usr/share/doc/opensnow/third-party-licenses/ \;; \

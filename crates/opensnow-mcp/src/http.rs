@@ -8,11 +8,12 @@
 
 use std::sync::Arc;
 
-use opensnow_control::{ControlError, ControlPlane, WorksheetRecord};
+use opensnow_control::{ControlError, ControlPlane};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::analytics::{dashboard_json, worksheet_json};
 use crate::mcp::McpServer;
 use crate::{query_result_to_json, record_to_json, summary_to_json};
 
@@ -48,13 +49,6 @@ fn bearer(headers: &[(String, String)]) -> Option<&str> {
         .and_then(|(_, v)| v.strip_prefix("Bearer "))
 }
 
-fn worksheet_to_json(w: &WorksheetRecord) -> Value {
-    json!({
-        "id": w.id, "name": w.name, "sql": w.sql_text,
-        "created_at": w.created_at, "updated_at": w.updated_at,
-    })
-}
-
 struct Response {
     status: u16,
     content_type: &'static str,
@@ -73,9 +67,63 @@ fn auth_failed() -> Response {
     json_response(401, json!({"error": "authentication failed"}))
 }
 
+async fn refresh_tile(
+    plane: &ControlPlane, token: &str, worksheet: &opensnow_control::WorksheetRecord,
+) -> (u16, Value) {
+    let mut record = None;
+    let result = plane.execute_authenticated_with_record(token, &worksheet.sql_text, &mut record).await;
+    let error = match result {
+        Ok(result) => {
+            let mut data = query_result_to_json(&result);
+            data["refreshed_at"] = json!(record.as_ref().map(|r| r.started_at_unix_ms + r.elapsed.as_millis() as u64));
+            match plane.save_tile_result(token, worksheet, &data, result.outcome.cost_record_seq).await {
+                Ok(()) => {
+                    data["chart_spec"] = json!(worksheet.chart_spec);
+                    return (200, data);
+                }
+                Err(error) => error,
+            }
+        }
+        Err(error) => error,
+    };
+    if matches!(error, ControlError::AuthFailed) {
+        return (401, json!({"error": "authentication failed"}));
+    }
+    (status_for(&error), json!({
+        "error": error.to_string(), "cost_cap": matches!(error, ControlError::CostCapExceeded),
+        "cost_record": record.as_ref().map(record_to_json),
+    }))
+}
+
 async fn route(server: &HttpServer, method: &str, path: &str, headers: &[(String, String)], body: &[u8]) -> Response {
     if matches!((method, path), ("GET", "/") | ("GET", "/ui")) {
         return Response { status: 200, content_type: "text/html; charset=utf-8", body: UI_HTML.to_string() };
+    }
+    let asset = match (method, path) {
+        ("GET", "/assets/vega.js") => Some(include_str!("../../../vendor/vega/vega.min.js")),
+        ("GET", "/assets/vega-lite.js") => Some(include_str!("../../../vendor/vega/vega-lite.min.js")),
+        ("GET", "/assets/vega-embed.js") => Some(include_str!("../../../vendor/vega/vega-embed.min.js")),
+        ("GET", "/assets/analytics.js") => Some(include_str!("analytics.js")),
+        _ => None,
+    };
+    if let Some(asset) = asset {
+        return Response { status: 200, content_type: "text/javascript; charset=utf-8", body: asset.into() };
+    }
+    if let ["", "api", "dashboards", id] | ["", "api", "chart-spec", id] = path.split('/').collect::<Vec<_>>().as_slice() {
+        if method == "GET" {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            return if path.starts_with("/api/dashboards/") {
+                match server.plane.dashboard(token, id).await {
+                    Ok((dashboard, tiles)) => json_response(200, dashboard_json(dashboard, tiles)),
+                    Err(error) => error_response(&error),
+                }
+            } else {
+                match server.plane.worksheet(token, id).await {
+                    Ok(worksheet) => json_response(200, json!({"worksheet_id": id, "chart_spec": worksheet.chart_spec})),
+                    Err(error) => error_response(&error),
+                }
+            };
+        }
     }
     let json_body: Value = if body.is_empty() { json!({}) } else {
         match serde_json::from_slice(body) { Ok(v) => v, Err(e) => return json_response(400, json!({"error": format!("bad json: {e}")})) }
@@ -173,7 +221,7 @@ async fn route(server: &HttpServer, method: &str, path: &str, headers: &[(String
         ("GET", "/api/worksheets") => {
             let Some(token) = bearer(headers) else { return auth_failed(); };
             match server.plane.list_worksheets(token).await {
-                Ok(list) => json_response(200, json!({"worksheets": list.iter().map(worksheet_to_json).collect::<Vec<_>>() })),
+                Ok(list) => json_response(200, json!({"worksheets": list.iter().map(worksheet_json).collect::<Vec<_>>() })),
                 Err(e) => error_response(&e),
             }
         }
@@ -181,8 +229,9 @@ async fn route(server: &HttpServer, method: &str, path: &str, headers: &[(String
             let Some(token) = bearer(headers) else { return auth_failed(); };
             let Some(name) = json_body["name"].as_str() else { return json_response(400, json!({"error": "name is required"})); };
             let sql = json_body["sql"].as_str().unwrap_or("");
-            match server.plane.save_worksheet(token, json_body["id"].as_str(), name, sql).await {
-                Ok(w) => json_response(200, worksheet_to_json(&w)),
+            let chart = json_body.get("chart_spec").map(|spec| (!spec.is_null()).then(|| spec.clone()));
+            match server.plane.save_worksheet_with_chart(token, json_body["id"].as_str(), name, sql, chart).await {
+                Ok(w) => json_response(200, worksheet_json(&w)),
                 Err(e) => error_response(&e),
             }
         }
@@ -193,6 +242,86 @@ async fn route(server: &HttpServer, method: &str, path: &str, headers: &[(String
                 Ok(()) => json_response(200, json!({"deleted": id})),
                 Err(e) => error_response(&e),
             }
+        }
+        ("GET", "/api/dashboards") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            match server.plane.list_dashboards(token).await {
+                Ok(dashboards) => json_response(200, json!({"dashboards": dashboards})),
+                Err(error) => error_response(&error),
+            }
+        }
+        ("POST", "/api/dashboards") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            let Some(name) = json_body["name"].as_str() else { return json_response(400, json!({"error": "name is required"})); };
+            let Ok(ids) = serde_json::from_value::<Vec<String>>(json_body["worksheet_ids"].clone()) else {
+                return json_response(400, json!({"error": "worksheet_ids must be an array of strings"}));
+            };
+            match server.plane.save_dashboard(token, json_body["id"].as_str(), name, &ids).await {
+                Ok(dashboard) => json_response(200, json!(dashboard)),
+                Err(error) => error_response(&error),
+            }
+        }
+        ("POST", "/api/dashboards/delete") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            let Some(id) = json_body["id"].as_str() else { return json_response(400, json!({"error": "id is required"})); };
+            match server.plane.delete_dashboard(token, id).await {
+                Ok(()) => json_response(200, json!({"deleted": id})),
+                Err(error) => error_response(&error),
+            }
+        }
+        ("POST", "/api/chart-spec") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            let (Some(id), Some(spec)) = (json_body["worksheet_id"].as_str(), json_body.get("chart_spec")) else {
+                return json_response(400, json!({"error": "worksheet_id and chart_spec are required"}));
+            };
+            let chart = (!spec.is_null()).then(|| spec.clone());
+            match server.plane.set_chart_spec(token, id, chart, false).await {
+                Ok(()) => json_response(200, json!({"worksheet_id": id, "chart_spec": spec})),
+                Err(error) => error_response(&error),
+            }
+        }
+        ("POST", "/api/dashboards/refresh-tile") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            let (Some(dashboard_id), Some(worksheet_id)) = (json_body["dashboard_id"].as_str(), json_body["worksheet_id"].as_str()) else {
+                return json_response(400, json!({"error": "dashboard_id and worksheet_id are required"}));
+            };
+            let worksheet = match server.plane.tile_worksheet(token, dashboard_id, worksheet_id).await {
+                Ok(worksheet) => worksheet,
+                Err(error) => return error_response(&error),
+            };
+            let (status, data) = refresh_tile(&server.plane, token, &worksheet).await;
+            json_response(status, data)
+        }
+        ("POST", "/api/dashboards/refresh") => {
+            let Some(token) = bearer(headers) else { return auth_failed(); };
+            let Some(id) = json_body["dashboard_id"].as_str() else {
+                return json_response(400, json!({"error": "dashboard_id is required"}));
+            };
+            let (dashboard, tiles) = match server.plane.dashboard(token, id).await {
+                Ok(data) => data,
+                Err(error) => return error_response(&error),
+            };
+            let mut results = Vec::with_capacity(tiles.len());
+            let mut total = 0.0;
+            let mut metered = false;
+            for tile in tiles {
+                let (status, data) = refresh_tile(&server.plane, token, &tile.worksheet).await;
+                if status == 401 { return auth_failed(); }
+                if let Some(cost) = data["outcome"]["cost_dollars"].as_f64().or_else(|| data["cost_record"]["cost_dollars"].as_f64()) {
+                    total += cost;
+                    metered = true;
+                }
+                results.push(json!({"worksheet_id": tile.worksheet.id, "status": status, "data": data}));
+            }
+            let refreshed_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_millis() as u64;
+            let summary = json!({"refreshed_at": refreshed_at, "cost_dollars": metered.then_some(total)});
+            if !results.is_empty() {
+                if let Err(error) = server.plane.save_dashboard_refresh(token, &dashboard, &summary).await {
+                    return error_response(&error);
+                }
+            }
+            json_response(200, json!({"tiles": results, "last_refresh": summary}))
         }
         // Who the caller's token belongs to. The UI uses this to show
         // the tenant and login for a token session.

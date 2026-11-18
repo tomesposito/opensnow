@@ -254,3 +254,149 @@ async fn worksheets_and_catalog_search_are_tenant_scoped() -> TestResult {
     server.abort();
     fx.teardown().await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn analytics_http_and_mcp_share_owned_worksheets_and_cost_records() -> TestResult {
+    let Some(fx) = setup("analytics").await? else { return Ok(()); };
+    let tenant = fx.plane.provision_tenant("analytics", "owner", "analytics-password", None, None).await?;
+    let other = fx.plane.provision_tenant("other", "owner", "other-password", None, None).await?;
+    let member = fx.plane.create_user(&tenant.tenant.id, "member", "member-password", opensnow_control::Role::Member).await?;
+    let member_token = fx.plane.issue_token(&tenant.tenant.id, &member.id, vec![opensnow_control::TokenScope::Write], None).await?.token;
+    let read = fx.plane.sign_in("analytics", "owner", "analytics-password").await?.token;
+    let (addr, server) = fx.serve_http().await;
+    let request = |method, path, token, body| {
+        let wire = req(method, path, token, &body);
+        async move { http_json(addr, &wire).await }
+    };
+    async fn call(addr: std::net::SocketAddr, token: &str, name: &str, arguments: Value) -> (bool, Value) {
+        let (status, response) = http_json(addr, &req("POST", "/mcp", Some(token), &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}
+        }))).await;
+        assert_eq!(status, 200);
+        let result = &response["result"];
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let is_error = result["isError"].as_bool().unwrap();
+        (is_error, serde_json::from_str(text).unwrap_or_else(|_| json!(text)))
+    }
+
+    let mut spec = json!({"$schema": "https://vega.github.io/schema/vega-lite/v5.json", "mark": "bar",
+        "encoding": {"x": {"field": "category", "type": "nominal"}, "y": {"field": "total", "type": "quantitative"}}});
+    let (status, good) = request("POST", "/api/worksheets", Some(&read), json!({
+        "name": "Revenue", "sql": "SELECT 'west' AS category, 200 AS total", "chart_spec": spec
+    })).await;
+    assert_eq!(status, 200, "{good}");
+    let (status, bad) = request("POST", "/api/worksheets", Some(&read), json!({
+        "name": "Broken", "sql": "SELECT * FROM absent"
+    })).await;
+    assert_eq!(status, 200, "{bad}");
+    let good_id = good["id"].as_str().unwrap();
+    let bad_id = bad["id"].as_str().unwrap();
+    let (status, board) = request("POST", "/api/dashboards", Some(&read), json!({
+        "name": "Warehouse health", "worksheet_ids": [bad_id, good_id]
+    })).await;
+    assert_eq!(status, 200, "{board}");
+    let board_id = board["id"].as_str().unwrap();
+    let board_path = format!("/api/dashboards/{board_id}");
+    let chart_path = format!("/api/chart-spec/{good_id}");
+    for outsider in [&other.token, &member_token] {
+        for path in [&board_path, &chart_path] {
+            assert_eq!(request("GET", path, Some(outsider), json!({})).await.0, 404);
+        }
+        assert_eq!(request("POST", "/api/dashboards", Some(outsider), json!({
+            "name": "Owned elsewhere", "worksheet_ids": [good_id]
+        })).await.0, 404);
+        assert_eq!(request("POST", "/api/chart-spec", Some(outsider), json!({
+            "worksheet_id": good_id, "chart_spec": null
+        })).await.0, 404);
+        assert!(call(addr, outsider, "get_dashboard", json!({"dashboard_id": board_id})).await.0);
+    }
+
+    spec["mark"] = json!("line");
+    let args = json!({"worksheet_id": good_id, "chart_spec": spec});
+    let (error, refused) = call(addr, &read, "set_chart_spec", args.clone()).await;
+    assert!(error && refused.as_str().unwrap().contains("token scope"));
+    assert_eq!(call(addr, &tenant.token, "set_chart_spec", args.clone()).await, (false, args));
+    let mut invalid_spec = spec.clone();
+    invalid_spec["data"] = json!({"url": "https://example.invalid/data.json"});
+    assert_eq!(request("POST", "/api/chart-spec", Some(&read), json!({
+        "worksheet_id": good_id, "chart_spec": invalid_spec
+    })).await.0, 400);
+    let (status, worksheet) = request("POST", "/api/worksheets", Some(&read), json!({
+        "id": good_id, "name": "Revenue updated", "sql": good["sql"]
+    })).await;
+    assert_eq!(status, 200);
+    assert_eq!(worksheet["chart_spec"], spec);
+
+    let (status, updated) = request("GET", &board_path, Some(&read), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(updated["tiles"][0]["id"], bad_id);
+    assert_eq!(updated["tiles"][1]["chart_spec"], spec);
+    let (_, second) = request("POST", "/api/dashboards", Some(&read), json!({
+        "name": "Another view", "worksheet_ids": [good_id]
+    })).await;
+    let second_id = second["id"].as_str().unwrap();
+    let (error, second) = call(addr, &read, "get_dashboard", json!({"dashboard_id": second_id})).await;
+    assert!(!error);
+    assert_eq!(second["tiles"][0]["chart_spec"], spec);
+
+    let refresh = |id| req("POST", "/api/dashboards/refresh-tile", Some(&read), &json!({
+        "dashboard_id": board_id, "worksheet_id": id
+    }));
+    let (bad_wire, good_wire) = (refresh(bad_id), refresh(good_id));
+    let (bad_refresh, good_refresh) = tokio::join!(http_json(addr, &bad_wire), http_json(addr, &good_wire));
+    assert_eq!(bad_refresh.0, 500);
+    let failed_cost = &bad_refresh.1["cost_record"];
+    assert_eq!(failed_cost["status"], "failed");
+    assert_eq!(good_refresh.0, 200, "{}", good_refresh.1);
+    assert_eq!(good_refresh.1["rows"], json!([["west", "200"]]));
+    let (status, history) = request("GET", "/api/cost-records", Some(&read), json!({})).await;
+    assert_eq!(status, 200);
+    let records = history["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.contains(failed_cost));
+    let outcome = &good_refresh.1["outcome"];
+    let completed = records.iter().find(|r| r["seq"] == outcome["cost_record_seq"]).unwrap();
+    assert_eq!(completed["cost_dollars"], outcome["cost_dollars"]);
+    let (error, latest) = call(addr, &read, "get_dashboard", json!({"dashboard_id": board_id})).await;
+    assert!(!error);
+    assert!(latest["tiles"][0]["latest_result"].is_null());
+    assert_eq!(latest["tiles"][1]["latest_result"]["outcome"], *outcome);
+
+    let (status, refresh_all) = request("POST", "/api/dashboards/refresh", Some(&read), json!({
+        "dashboard_id": board_id
+    })).await;
+    assert_eq!(status, 200, "{refresh_all}");
+    assert_eq!(refresh_all["tiles"][0]["status"], 500);
+    assert_eq!(refresh_all["tiles"][1]["status"], 200);
+    let charged = refresh_all["tiles"][0]["data"]["cost_record"]["cost_dollars"].as_f64().unwrap()
+        + refresh_all["tiles"][1]["data"]["outcome"]["cost_dollars"].as_f64().unwrap();
+    assert_eq!(refresh_all["last_refresh"]["cost_dollars"], charged);
+    let (_, dashboards) = request("GET", "/api/dashboards", Some(&read), json!({})).await;
+    let refreshed = dashboards["dashboards"].as_array().unwrap().iter().find(|d| d["id"] == board_id).unwrap();
+    assert_eq!(refreshed["last_refresh"], refresh_all["last_refresh"]);
+
+    let capped = fx.plane.provision_tenant("capped", "owner", "capped-password", Some(0), None).await?;
+    let worksheet = fx.plane.save_worksheet(&capped.token, None, "Blocked", "SELECT 1").await?;
+    let dashboard = fx.plane.save_dashboard(&capped.token, None, "Limits", &[worksheet.id.clone()]).await?;
+    let (status, result) = request("POST", "/api/dashboards/refresh-tile", Some(&capped.token), json!({
+        "dashboard_id": dashboard.id, "worksheet_id": worksheet.id
+    })).await;
+    assert_eq!(status, 403);
+    assert_eq!(result["cost_cap"], true);
+    assert!(result["cost_record"].is_null());
+
+    assert_eq!(request("POST", "/api/worksheets/delete", Some(&read), json!({"id": bad_id})).await.0, 200);
+    let (_, board_after_delete) = request("GET", &board_path, Some(&read), json!({})).await;
+    assert_eq!(board_after_delete["worksheet_ids"], json!([good_id]));
+    assert!(board_after_delete["last_refresh"].is_null());
+    assert_eq!(request("POST", "/api/dashboards/delete", Some(&read), json!({"id": second_id})).await.0, 200);
+    let second_path = format!("/api/dashboards/{second_id}");
+    assert_eq!(request("GET", &second_path, Some(&read), json!({})).await.0, 404);
+
+    fx.plane.suspend_tenant(&tenant.tenant.id).await?;
+    for path in [&board_path, &chart_path] {
+        assert_eq!(request("GET", path, Some(&read), json!({})).await, (401, json!({"error": "authentication failed"})));
+    }
+    server.abort();
+    fx.teardown().await
+}

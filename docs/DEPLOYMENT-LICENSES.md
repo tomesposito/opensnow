@@ -28,6 +28,7 @@ It adds no program or license. Dockerfile copies only the following:
 | Shipped content | License and source |
 | --- | --- |
 | opensnow-mcp, including embedded UI and docs | Apache-2.0, workspace manifests |
+| Vendored worksheet chart renderer | BSD-3-Clause, ISC, MIT, and Unlicense. See the [renderer inventory](../vendor/vega/dependency-licenses.tsv). |
 | Statically linked Rust dependencies | MIT, Apache-2.0, BSD, ISC, Zlib, Unicode, CC0, Unlicense, bzip2 and BSL alternatives listed in the inventory below |
 | glibc loader, libc and libm | LGPL-2.1-or-later with upstream exceptions; [glibc COPYING.LIB](https://sourceware.org/git/?p=glibc.git;a=blob;f=COPYING.LIB;hb=HEAD); Debian libc6 copyright copied into the runtime |
 | libgcc_s | GPL-3.0 with GCC Runtime Library Exception 3.1; [upstream exception](https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html), [exception text](https://github.com/gcc-mirror/gcc/blob/master/COPYING.RUNTIME); Debian libgcc-s1 copyright copied into the runtime |
@@ -75,6 +76,16 @@ This metadata command does not add packages or update Cargo.lock. The build also
 the vendored Iceberg LICENSE and NOTICE into the runtime. The inventory
 is an audit, not replacement license text. Retain those notices on
 redistribution.
+
+## Browser renderer
+
+The issue #38 D-04 check passed before implementation. The pinned Vega
+5.33.0, Vega-Lite 5.23.0, and Vega-Embed 6.29.0 releases are
+BSD-3-Clause. The browser bundles come from the npm releases. Their
+source maps and release lockfiles identify the bundled dependencies.
+The renderer inventory records their npm manifest licenses and notice
+locations. Docker copies the license texts and inventory beside the
+existing Rust notices.
 
 ## Adjacent services
 

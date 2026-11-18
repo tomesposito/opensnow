@@ -1,6 +1,7 @@
 //! Local mode, MCP server, and HTTP transport for opensnow.
 //! See docs/MCP.md and issue #12 (slice 1.9).
 
+mod analytics;
 pub mod http;
 pub mod local;
 pub mod mcp;
