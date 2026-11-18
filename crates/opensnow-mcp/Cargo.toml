@@ -19,6 +19,11 @@ uuid.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+rand.workspace = true
+
 [dev-dependencies]
 tokio.workspace = true
 tempfile.workspace = true

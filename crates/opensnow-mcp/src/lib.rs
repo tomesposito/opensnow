@@ -5,6 +5,7 @@ mod analytics;
 pub mod http;
 pub mod local;
 pub mod mcp;
+pub mod pgwire;
 pub mod results;
 
 pub use local::LocalDb;
