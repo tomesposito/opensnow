@@ -533,6 +533,7 @@ async fn session_statements_and_error_recovery() -> TestResult {
     let before = fixture.costs(&tenant).await;
     let probes = client.query("SET TIME ZONE 'UTC'; SELECT version(); SELECT current_database();
         SHOW TimeZone; SELECT current_schema(); SELECT pg_catalog.set_config('TimeZone', 'UTC', false);
+        SELECT pg_catalog.set_config('statement_timeout', '5000', false);
         SELECT pg_catalog.format_type(20, -1)").await?;
     assert_eq!(
         texts(&probes),
@@ -541,7 +542,8 @@ async fn session_statements_and_error_recovery() -> TestResult {
             "tenant_a",
             "UTC",
             tenant.tenant.namespace.as_str(),
-            "false",
+            "UTC",
+            "5000",
             "bigint"
         ]
     );

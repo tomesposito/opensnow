@@ -55,8 +55,8 @@ Session commands and catalog probes do not consume warehouse usage:
 - Single-expression SELECT probes support `version()`,
   `current_database()`, `current_user`, `session_user`, `user`,
   `current_schema()`, and `pg_backend_pid()`.
-  `pg_catalog.set_config` echoes its Boolean third argument without
-  changing settings. `format_type` resolves supported OIDs.
+  `pg_catalog.set_config` returns the value it was given (its second argument)
+  without changing settings. `format_type` resolves supported OIDs.
 - `information_schema.tables` and `information_schema.columns`
   expose the tenant's own tables and columns, with simple projections,
   equality and LIKE filters, and ordering. Nullability reflects Iceberg's

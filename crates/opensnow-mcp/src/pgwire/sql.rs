@@ -396,7 +396,6 @@ impl Probe {
             self.label.clone(),
             match self.name.as_str() {
                 "pg_backend_pid" => 23,
-                "set_config" => 16,
                 _ => 25,
             },
         )
@@ -413,23 +412,22 @@ impl Probe {
                 let [name, value, local] = self.arguments.as_slice() else {
                     unreachable!()
                 };
-                if string_literal(name).is_none() || string_literal(value).is_none() {
+                let value = string_literal(value).ok_or_else(Error::unsupported)?;
+                if string_literal(name).is_none() {
                     return Err(Error::unsupported());
                 }
                 let local = unnest(local);
                 match local {
-                    Expr::Value(value) if matches!(value.value, Value::Boolean(_)) => {
-                        value.value.to_string()
-                    }
+                    Expr::Value(value) if matches!(value.value, Value::Boolean(_)) => {}
                     _ => match string_literal(local)
                         .map(str::to_ascii_lowercase)
                         .as_deref()
                     {
-                        Some("true" | "t") => "true".into(),
-                        Some("false" | "f") => "false".into(),
+                        Some("true" | "t" | "false" | "f") => {}
                         _ => return Err(Error::unsupported()),
                     },
                 }
+                value.to_owned()
             }
             "format_type" => {
                 let [oid, modifier] = self.arguments.as_slice() else {
