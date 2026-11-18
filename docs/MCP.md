@@ -48,6 +48,10 @@ Tools:
 | sample_rows | Up to `limit` rows from one table. Default 10, max 100. |
 | query | One read-only statement. Write statements are refused. |
 | execute_write | One write statement: create, insert, update, delete, merge, drop. Read statements are refused. |
+| get_chart_spec | Read a worksheet's Vega-Lite v5 spec. |
+| set_chart_spec | Save or clear a worksheet chart. Hosted calls require write scope. |
+| list_dashboards | List the caller's dashboards. |
+| get_dashboard | Read a dashboard with its ordered tiles and latest results. |
 | cost_records | The caller's query log from slice 1.7, with the cost of each query in dollars. |
 | cost_summary | The caller's cost totals. |
 | docs_search | Lines from the shipped docs that match the query text. |
@@ -98,6 +102,8 @@ Routes:
   `POST /api/describe`, `POST /api/search`, and the worksheet routes
   `GET /api/worksheets`, `POST /api/worksheets`, and
   `POST /api/worksheets/delete`. See docs/WORKSHEETS-UI.md.
+
+See [Analytics](ANALYTICS.md) for the chart and dashboard routes.
 
 Error mapping is plain: 401 for authentication failure (the control
 plane's opaque error, unchanged), 403 for access denied and cost cap,

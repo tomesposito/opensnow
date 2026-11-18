@@ -75,11 +75,53 @@
   .panel.red{background:var(--red-bg);border:1px solid #fecaca;color:#7f1d1d}
   .panel.amber{background:var(--amber-bg);border:1px solid #fde68a;color:#78350f}
   .panel.plain{background:#fff;border:1px solid var(--line);color:var(--mut);text-align:center;padding:26px}
+  .session-ended{text-align:center;margin:44px auto;max-width:420px;padding:16px}
+  .session-ended .logo{justify-content:center;margin-bottom:24px}
+  .session-ended h1{font-size:18px}
+  .analytics-main{padding:18px;min-width:0}
+  .analytics-main h2{margin:0 0 4px;font-size:17px}
+  #section-dashboards.analytics-main{padding:0}
+  #dashboard-view,#dashboard-error{margin:18px}
+  .dashboard-list-open .navtabs{display:none}
+  .dashboard-nav{display:flex;align-items:center;justify-content:space-between;width:100%;margin:2px 0;padding:6px 8px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left;cursor:pointer}
+  .dashboard-nav[aria-current=page]{background:#e0f2fe;color:#0369a1;font-weight:700}
+  .dashboard-nav:hover{background:#e0f2fe}
+  .dashboard-side-note{margin:12px 6px 4px;padding-top:10px;border-top:1px dashed var(--line)}
+  .dashboard-list{display:grid;gap:8px}
+  .dashboard-row,.tile{border:1px solid var(--line);border-radius:10px;background:#fff;min-width:0}
+  .dashboard-row,.tile-head,.tile-foot{display:flex;align-items:center;gap:10px;padding:9px 12px}
+  .dashboard-row .sub{margin:3px 0 0}
+  .dashboard-icon{background:#e0f2fe;color:#0369a1;border-radius:8px;padding:7px 9px}
+  .dashboard-refresh-cost{border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#f8fafc;font-size:12px;white-space:nowrap}
+  .dashboard-actions{margin-left:auto}
+  .dashboard-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .tile-head{border-bottom:1px solid var(--line)}
+  .tile-body{padding:10px 12px;min-height:120px}
+  .tile-foot{border-top:1px solid var(--line);font-size:12px;background:#f8fafc;color:#475569;flex-wrap:wrap}
+  .tile-foot .mono{margin-left:auto}
+  .tile-spinner{width:34px;height:34px;border:3px solid #e0f2fe;border-top-color:#0284c7;border-radius:50%;margin:18px auto 8px;animation:tile-spin 1s linear infinite}
+  @keyframes tile-spin{to{transform:rotate(360deg)}}
+  @media(prefers-reduced-motion:reduce){.tile-spinner{animation:none}}
+  .tile-running{text-align:center;color:#475569}
+  .chart{min-width:0;overflow:auto}
+  .chart > .chart-renderer{width:100%}
+  .chart-options{display:grid;grid-template-columns:max-content 1fr;gap:10px 14px;align-items:center}
+  .chart-options label{font-weight:600}
+  .chart-types{display:flex;flex-wrap:wrap;gap:6px}
+  .chart-types [aria-pressed=true],.result-tabs [aria-selected=true]{background:#e0f2fe;color:#0369a1;border-color:#7dd3fc}
+  .chart-json{background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;overflow:auto}
+  .analytics-dialog{width:min(680px,calc(100% - 32px));color:inherit;border:1px solid var(--line);border-radius:12px;padding:18px}
+  .analytics-dialog::backdrop{background:#0f172a66}
+  .analytics-dialog h2{font-size:17px;margin:0 0 4px}
+  .result-tabs{border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:10px}
+  .dashboard-pick-row{display:flex;align-items:center;gap:8px;padding:6px 0}
+  .dashboard-pick-row label{flex:1}
+  @media(max-width:720px){.dashboard-grid{grid-template-columns:1fr}.chart-options{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<!-- State 1 and 10: sign-in. Every failure shows the same opaque message. -->
+<!-- Password and token sign-in share the same opaque error. -->
 <div id="view-signin" class="signin-wrap">
   <div class="signin-card">
     <div class="logo"><span class="logo-mark">&#10052;</span> opensnow</div>
@@ -105,6 +147,13 @@
   </div>
 </div>
 
+<div id="view-session-ended" class="session-ended hidden">
+  <div class="logo"><span class="logo-mark">&#10052;</span> opensnow</div>
+  <h1>This session has ended</h1>
+  <p class="sub">Sign in again to continue. If this keeps happening, contact your workspace admin.</p>
+  <button class="btn primary" id="btn-session-signin">Sign in</button>
+</div>
+
 <!-- App -->
 <div id="view-app" class="hidden">
   <div class="topbar">
@@ -115,6 +164,7 @@
     <nav class="navtabs">
       <button class="navtab active" data-view="navigate">Navigate</button>
       <button class="navtab" data-view="worksheets">Worksheets</button>
+      <button class="navtab" data-view="dashboards">Dashboards</button>
       <button class="navtab" data-view="history">History</button>
     </nav>
     <button class="btn small" id="btn-signout">Sign out</button>
@@ -171,6 +221,8 @@
         <button class="btn primary" id="btn-run">Run</button>
         <button class="btn" id="btn-save">Save worksheet</button>
         <button class="btn" id="btn-delete">Delete</button>
+        <button class="btn" id="btn-chart-edit">Add chart</button>
+        <button class="btn" id="btn-pin">Pin to dashboard</button>
         <button class="btn hidden" id="btn-csv">Download CSV</button>
         <span class="sub">Ctrl + Enter to run</span>
       </div>
@@ -184,12 +236,103 @@
         <div class="panel red hidden" id="panel-error"></div>
         <div class="panel amber hidden" id="panel-cap"></div>
         <div id="results-wrap" class="hidden">
-          <div class="gridwrap" id="results-grid"></div>
+          <div class="toolbar result-tabs" role="tablist" aria-label="Worksheet results">
+            <button class="btn small" id="tab-results" role="tab" aria-selected="true" aria-controls="results-grid">Results</button>
+            <button class="btn small hidden" id="tab-chart" role="tab" aria-selected="false" aria-controls="worksheet-chart">Chart</button>
+            <button class="btn small" id="tab-history">History</button>
+          </div>
+          <div class="gridwrap" id="results-grid" role="tabpanel" aria-labelledby="tab-results"></div>
+          <div class="chart hidden" id="worksheet-chart" role="tabpanel" aria-labelledby="tab-chart"></div>
           <div class="costline" id="results-cost"></div>
         </div>
       </div>
     </div>
   </section>
+
+  <section id="section-dashboards" class="analytics-main hidden">
+    <div id="dashboards-list-view" class="shell">
+      <aside class="side" aria-label="Warehouse navigation">
+        <h4>Navigate</h4>
+        <button class="dashboard-nav" id="dashboard-nav-catalog">Catalog</button>
+        <button class="dashboard-nav" id="dashboard-nav-worksheets">Worksheets <span id="dashboard-worksheet-count"></span></button>
+        <button class="dashboard-nav" aria-current="page" id="dashboard-nav-dashboards">Dashboards <span id="dashboard-count"></span></button>
+        <h4>History</h4>
+        <button class="dashboard-nav" id="dashboard-nav-history">Query history and costs</button>
+        <p class="sub dashboard-side-note">OpenSight can connect to opensnow as a data source.</p>
+      </aside>
+      <div class="main">
+        <div class="toolbar">
+          <h2>Dashboards</h2>
+          <button class="btn primary dashboard-actions hidden" id="dashboard-new">+ New dashboard</button>
+        </div>
+        <p class="sub" id="dashboard-list-subtitle">Pin saved worksheets and refresh their results together.</p>
+        <div id="dashboard-list" class="dashboard-list"></div>
+      </div>
+    </div>
+    <div id="dashboard-view" class="hidden">
+      <button class="btn small" id="dashboard-back">← Dashboards</button>
+      <div class="toolbar">
+        <h2 id="dashboard-title"></h2><span class="dashboard-actions"></span>
+        <button class="btn" id="dashboard-edit">Edit dashboard</button>
+        <button class="btn primary" id="dashboard-refresh">Refresh all</button>
+      </div>
+      <p class="sub" id="dashboard-status" aria-live="polite"></p>
+      <div id="dashboard-tiles" class="dashboard-grid"></div>
+    </div>
+    <p class="panel red hidden" id="dashboard-error" role="alert"></p>
+  </section>
+
+  <dialog id="dashboard-editor" class="analytics-dialog">
+    <form id="dashboard-form">
+      <h2 id="dashboard-editor-title">New dashboard</h2>
+      <label for="dashboard-name">Name</label>
+      <input class="input" id="dashboard-name" required>
+      <p class="sub">Select saved worksheets and set their order.</p>
+      <div id="dashboard-worksheets"></div>
+      <p class="panel red hidden" id="dashboard-form-error" role="alert"></p>
+      <div class="toolbar">
+        <button class="btn primary" id="dashboard-save">Save dashboard</button>
+        <button class="btn" type="button" id="dashboard-cancel">Cancel</button>
+        <button class="btn dashboard-actions hidden" type="button" id="dashboard-delete">Delete dashboard</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="pin-editor" class="analytics-dialog">
+    <form id="pin-form">
+      <h2>Pin to dashboard</h2>
+      <label for="pin-dashboard">Dashboard</label>
+      <select class="input" id="pin-dashboard"></select>
+      <p class="panel red hidden" id="pin-error" role="alert"></p>
+      <div class="toolbar">
+        <button class="btn primary" id="pin-submit">Pin worksheet</button>
+        <button class="btn" type="button" id="pin-cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="chart-editor" class="analytics-dialog">
+    <form id="chart-form">
+      <h2 id="chart-title">Add a chart</h2>
+      <p class="sub" id="chart-worksheet"></p>
+      <div class="chart-options">
+        <label id="chart-type-label">Chart type</label>
+        <div class="chart-types" id="chart-types" role="group" aria-labelledby="chart-type-label"></div>
+        <label for="chart-x">X field</label><select class="input" id="chart-x"></select>
+        <label for="chart-y">Y field</label><select class="input" id="chart-y"></select>
+        <label for="chart-group">Group by (optional)</label><select class="input" id="chart-group"></select>
+        <label id="chart-preview-label">Preview</label><div class="chart" id="chart-preview" aria-labelledby="chart-preview-label"></div>
+      </div>
+      <section id="chart-json-section" class="hidden">
+        <h3>Vega-Lite spec</h3>
+        <pre class="chart-json" id="chart-json"></pre>
+      </section>
+      <p class="panel red hidden" id="chart-editor-error" role="alert"></p>
+      <div class="toolbar">
+        <button class="btn primary" id="chart-save">Save chart</button>
+        <button class="btn" type="button" id="chart-cancel">Cancel</button>
+        <button class="btn dashboard-actions hidden" type="button" id="chart-remove">Remove chart</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- History: state 9 -->
   <section id="section-history" class="hidden" style="padding:18px">
@@ -233,6 +376,7 @@ async function api(method, path, body) {
   if (!res.ok) {
     const err = new Error(data.error || ("HTTP " + res.status));
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -244,11 +388,13 @@ function sessionEnded() {
   token = "";
   sessionStorage.removeItem("osn_token");
   sessionInfo = null;
+  resetAnalytics();
   $("view-app").classList.add("hidden");
-  $("view-signin").classList.remove("hidden");
-  $("signin-error").classList.remove("hidden");
-  $("signin-sub").textContent = "Your session has ended. Sign in again to continue.";
+  $("view-signin").classList.add("hidden");
+  $("view-session-ended").classList.remove("hidden");
+  $("btn-session-signin").focus();
 }
+$("btn-session-signin").onclick = () => location.reload();
 
 async function callApi(method, path, body) {
   try { return await api(method, path, body); }
@@ -257,6 +403,7 @@ async function callApi(method, path, body) {
 
 function showApp() {
   $("view-signin").classList.add("hidden");
+  $("view-session-ended").classList.add("hidden");
   $("view-app").classList.remove("hidden");
   $("tb-tenant").textContent = sessionInfo ? sessionInfo.tenant_name : "";
   $("tb-login").textContent = sessionInfo ? sessionInfo.login : "";
@@ -319,6 +466,10 @@ document.querySelectorAll(".navtab").forEach((tab) => {
     $("section-navigate").classList.toggle("hidden", view !== "navigate");
     $("section-worksheets").classList.toggle("hidden", view !== "worksheets");
     $("section-history").classList.toggle("hidden", view !== "history");
+    $("section-dashboards").classList.toggle("hidden", view !== "dashboards");
+    $("view-app").classList.toggle("dashboard-list-open", view === "dashboards");
+    if (view === "dashboards") loadDashboards();
+    else leaveDashboards();
     if (view === "history") loadHistory();
   });
 });
@@ -403,12 +554,14 @@ async function loadWorksheets() {
   let data;
   try { data = await callApi("GET", "/api/worksheets"); } catch (e) { return; }
   const list = $("ws-list");
+  $("dashboard-worksheet-count").textContent = data.worksheets.length;
   list.innerHTML = "";
   (data.worksheets || []).forEach((w) => {
     const row = document.createElement("div");
     row.className = "wsrow" + (w.id === currentWorksheetId ? " sel" : "");
     row.textContent = w.name;
     row.addEventListener("click", () => {
+      selectWorksheetChart(w.chart_spec);
       currentWorksheetId = w.id;
       $("ws-name").value = w.name;
       $("ws-sql").value = w.sql;
@@ -420,6 +573,7 @@ async function loadWorksheets() {
 
 $("btn-ws-new").addEventListener("click", () => {
   currentWorksheetId = null;
+  selectWorksheetChart(null);
   $("ws-name").value = "Untitled";
   $("ws-sql").value = "";
   loadWorksheets();
@@ -431,6 +585,7 @@ $("btn-save").addEventListener("click", async () => {
       id: currentWorksheetId, name: $("ws-name").value, sql: $("ws-sql").value,
     });
     currentWorksheetId = saved.id;
+    activeChartSpec = saved.chart_spec;
     await loadWorksheets();
   } catch (e) { showError(e, -1); }
 });
@@ -493,7 +648,8 @@ async function showError(err, recordsBefore) {
 
 async function runQuery() {
   const sql = $("ws-sql").value.trim();
-  if (!sql) return;
+  if (!sql || $("btn-run").disabled) return;
+  const selection = worksheetSelection;
   hideRunPanels();
   $("panel-running").classList.remove("hidden");
   $("btn-run").disabled = true;
@@ -515,6 +671,7 @@ async function runQuery() {
   try {
     const result = await callApi("POST", "/api/execute", { sql });
     clearInterval(timer);
+    if (selection !== worksheetSelection) return;
     hideRunPanels();
     lastResult = result;
     $("results-wrap").classList.remove("hidden");
@@ -524,9 +681,10 @@ async function runQuery() {
       (Number(o.elapsed_ms) / 1000).toFixed(2) + " s · " + Number(o.bytes_returned) + " bytes · " +
       Number(o.vcpu_seconds).toFixed(3) + " vCPU-sec · Cost <b>" + fmtUsd(o.cost_dollars) + "</b> · Record #" + o.cost_record_seq;
     $("btn-csv").classList.remove("hidden");
+    showWorksheetResult(Boolean(activeChartSpec));
   } catch (e) {
     clearInterval(timer);
-    if (e.status === 401) { return; } // sessionEnded already ran
+    if (e.status === 401 || selection !== worksheetSelection) return;
     await showError(e, recordsBefore);
   } finally {
     $("btn-run").disabled = false;
@@ -584,17 +742,10 @@ async function loadHistory() {
   }
 }
 
-/* Resume a session stored in sessionStorage. */
-(async () => {
-  if (!token) return;
-  try {
-    sessionInfo = await api("GET", "/api/session");
-    showApp();
-  } catch (e) {
-    token = "";
-    sessionStorage.removeItem("osn_token");
-  }
-})();
 </script>
+<script src="/assets/vega.js"></script>
+<script src="/assets/vega-lite.js"></script>
+<script src="/assets/vega-embed.js"></script>
+<script src="/assets/analytics.js"></script>
 </body>
 </html>

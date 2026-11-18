@@ -386,3 +386,30 @@ async fn local_mutation_checks_cap_before_storage_runs() -> TestResult {
     assert!(db.cost_records().await?.is_empty());
     Ok(())
 }
+
+#[tokio::test]
+async fn local_analytics_uses_catalog_metadata_after_reopen() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let db = LocalDb::open(temp.path(), None).await?;
+    let worksheet = db.save_worksheet(None, "Events", "SELECT 1 AS x, 2 AS y").await?;
+    let dashboard = db.save_dashboard(None, "Overview", std::slice::from_ref(&worksheet)).await?;
+    let result = db.refresh_dashboard_tile(&dashboard.id, &worksheet).await?;
+    let server = McpServer::local(db);
+    let spec = json!({"mark": "point", "encoding": {
+        "x": {"field": "x", "type": "quantitative"},
+        "y": {"field": "y", "type": "quantitative"}
+    }});
+    let args = json!({"worksheet_id": worksheet, "chart_spec": spec});
+    assert_eq!(call(&server, "set_chart_spec", args.clone(), None).await, args);
+    drop(server);
+
+    let server = McpServer::local(LocalDb::open(temp.path(), None).await?);
+    assert_eq!(call(&server, "get_chart_spec", json!({"worksheet_id": worksheet}), None).await, args);
+    let list = call(&server, "list_dashboards", json!({}), None).await;
+    assert_eq!(list["dashboards"][0]["id"], dashboard.id);
+    let detail = call(&server, "get_dashboard", json!({"dashboard_id": dashboard.id}), None).await;
+    assert_eq!(detail["tiles"][0]["id"], worksheet);
+    assert_eq!(detail["tiles"][0]["chart_spec"], spec);
+    assert_eq!(detail["tiles"][0]["latest_result"], result);
+    Ok(())
+}

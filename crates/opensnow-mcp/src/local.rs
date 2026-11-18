@@ -20,6 +20,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct LocalDb {
     engine: Arc<Mutex<EngineService>>,
     storage: Arc<StorageCatalog>,
+    pub(crate) metadata: sqlx::SqlitePool,
     pub root: std::path::PathBuf,
 }
 
@@ -45,7 +46,20 @@ impl LocalDb {
         engine.register_tenant(LOCAL_TENANT, ResourceGroup { cost_cap_units, ..ResourceGroup::default() })?;
         let provider = IcebergCatalogProvider::try_new(storage.catalog.clone()).await.map_err(|e| -> BoxError { Box::new(e) })?;
         engine.context(LOCAL_TENANT)?.register_catalog("ice", Arc::new(provider));
-        Ok(Self { engine: Arc::new(Mutex::new(engine)), storage, root })
+        let metadata = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(root.join("catalog.db")),
+        ).await?;
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS opensnow_worksheets (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, sql_text TEXT NOT NULL, chart_spec TEXT, latest_tile_result TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE TABLE IF NOT EXISTS opensnow_dashboards (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, worksheet_ids TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );",
+        ).execute(&metadata).await?;
+        Ok(Self { engine: Arc::new(Mutex::new(engine)), storage, metadata, root })
     }
 
     /// Runs one statement through the hosted guard, so table names are
